@@ -15,6 +15,7 @@
 
 - Use Node.js 26 and pnpm 11.20.0.
 - Keep the package ESM-only and the public surface limited to the `gc` binary.
+- Use Conventional Commits, adding a scope when useful and a body when the change needs further explanation.
 - Prefer Node.js built-ins over new dependencies.
 - Use `node:test` for tests and local servers for provider test doubles.
 - Never make live provider calls in tests.
