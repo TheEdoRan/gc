@@ -24,19 +24,19 @@ export async function discoverContext(root: string, files: string[]): Promise<Re
 	>();
 
 	for (const file of files) {
-		let directory = path.dirname(file);
+		let directory = path.posix.dirname(file);
 		for (;;) {
-			const depth = directory === "." ? 0 : directory.split(path.sep).length;
+			const depth = directory === "." ? 0 : directory.split(path.posix.sep).length;
 			for (const [name, kind, rank] of [
 				["AGENTS.md", "instruction", 0],
 				["CLAUDE.md", "instruction", 1],
 				["CONTEXT.md", "context", 2],
 			] as const) {
-				const relativePath = directory === "." ? name : path.join(directory, name);
+				const relativePath = directory === "." ? name : path.posix.join(directory, name);
 				candidates.set(relativePath, { relativePath, kind, depth, rank });
 			}
 			if (directory === ".") break;
-			directory = path.dirname(directory);
+			directory = path.posix.dirname(directory);
 		}
 	}
 
