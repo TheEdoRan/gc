@@ -1,0 +1,24 @@
+{
+	"$schema": "./node_modules/oxlint/configuration_schema.json",
+	"categories": {
+		"correctness": "error",
+		"suspicious": "error"
+	},
+	"options": {
+		"typeAware": true
+	},
+	"ignorePatterns": ["dist/**"],
+	"rules": {
+		"preserve-caught-error": "off",
+		"typescript/no-unsafe-type-assertion": "off",
+		"unicorn/no-array-sort": "off"
+	},
+	"overrides": [
+		{
+			"files": ["test/**/*.ts"],
+			"rules": {
+				"typescript/no-floating-promises": "off"
+			}
+		}
+	]
+}
