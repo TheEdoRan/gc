@@ -3,8 +3,8 @@ import { parseArgs } from "node:util";
 import { editor, select } from "@inquirer/prompts";
 
 import packageJson from "../package.json" with { type: "json" };
-import { generateCommitPlan, type CommitPlan } from "./ai.ts";
-import { readConfig, runInit, runProfile } from "./config.ts";
+import { DEFAULT_MAX_INPUT_TOKENS, generateCommitPlan, type CommitPlan } from "./ai.ts";
+import { mergeConfig, readConfig, readProjectConfig, runInit, runProfile } from "./config.ts";
 import { discoverContext } from "./context.ts";
 import { createCommits, readRepository } from "./git.ts";
 
@@ -62,12 +62,17 @@ export function parseCliArgs(args: string[]): CliArguments {
 }
 
 export function formatPlan(plan: CommitPlan): string {
-	return plan.commits
+	const commits = plan.commits
 		.map(
 			(commit, index) =>
 				`\n${index + 1}. ${commit.subject}${commit.body ? `\n\n${commit.body}` : ""}\n\n${commit.files.map((file) => `   ${file}`).join("\n")}`
 		)
 		.join("\n");
+	const banner = plan.fallback
+		? `\n! the provider did not return a plan, showing a local fallback you can edit${plan.failureReason ? `\n! ${plan.failureReason}` : ""}\n`
+		: "";
+	const notice = plan.notice ? `\n\ncontext: ${plan.notice}` : "";
+	return `${banner}${commits}${notice}`;
 }
 
 export interface ReviewPrompts {
@@ -132,22 +137,51 @@ export async function run(args = process.argv.slice(2)): Promise<void> {
 	if (!config) throw new Error("No configuration found. Run gc init first.");
 	const profile = config.profiles[config.activeProfile];
 	if (!profile) throw new Error(`Active profile does not exist: ${config.activeProfile}`);
-	const repository = await readRepository(process.cwd(), options.all);
+
+	// Retain a few multiples of the prompt budget while streaming so reallocation has slack, but
+	// stay bounded no matter how large the staged diff is.
+	const retainBudget = (profile.maxInputTokens ?? DEFAULT_MAX_INPUT_TOKENS) * 2 * 4;
+	const repository = await readRepository(process.cwd(), options.all, retainBudget);
 	if (!repository.paths.length) throw new Error("No staged changes.");
+
+	const merged = mergeConfig(config, await readProjectConfig(repository.root));
 	const context = await discoverContext(repository.root, repository.paths);
-	const split = options.split ?? config.split;
+	const split = options.split ?? merged.split;
 
 	for (;;) {
-		const plan = await generateCommitPlan({
-			profile,
-			diff: repository.diff,
-			files: repository.paths,
-			renames: repository.renames.map(({ from, to }) => [from, to]),
-			history: repository.history,
-			context,
-			split,
-			...(options.instructions ? { instructions: options.instructions } : {}),
-		});
+		// A reasoning model can think for a minute before its first token. Without this the CLI
+		// looks hung, and the user kills a request that was about to succeed.
+		const started = Date.now();
+		// Only on a terminal: in a pipe or a log the carriage returns are noise, not progress.
+		const ticker = process.stderr.isTTY
+			? setInterval(() => {
+					process.stderr.write(
+						`\r\u001b[Kwaiting for ${profile.model}... ${Math.round((Date.now() - started) / 1000)}s`
+					);
+				}, 1_000)
+			: undefined;
+		ticker?.unref();
+
+		let plan: CommitPlan;
+		try {
+			plan = await generateCommitPlan({
+				profile,
+				files: repository.files,
+				paths: repository.paths,
+				renames: repository.renames.map(({ from, to }) => [from, to]),
+				history: repository.history,
+				context,
+				split,
+				exclude: merged.excludeContent,
+				include: merged.includeContent,
+				...(options.instructions ? { instructions: options.instructions } : {}),
+			});
+		} finally {
+			if (ticker) {
+				clearInterval(ticker);
+				process.stderr.write("\r\u001b[K");
+			}
+		}
 		const action = await reviewPlan(plan);
 		if (action === "regenerate") continue;
 		if (action === "cancel") return void process.stdout.write("Cancelled.\n");

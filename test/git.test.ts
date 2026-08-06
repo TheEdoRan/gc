@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { createCommits, readRepository } from "../src/git.ts";
+import { batchPathspecs, createCommits, readRepository } from "../src/git.ts";
 
 function run(cwd: string, ...args: string[]): string {
 	return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -33,7 +33,120 @@ void test("reads staged paths, renames, history, and stages all changes", async 
 	assert.deepEqual(changes.paths.toSorted(), ["new.txt", "old.txt", "untracked.txt"]);
 	assert.deepEqual(changes.renames, [{ from: "old.txt", to: "new.txt" }]);
 	assert.deepEqual(changes.history, ["initial subject"]);
-	assert.match(changes.diff, /untracked\.txt/);
+
+	const untracked = changes.files.find((file) => file.path === "untracked.txt");
+	assert.ok(untracked);
+	assert.equal(untracked.status, "A");
+	assert.equal(untracked.added, 1);
+	assert.equal(untracked.deleted, 0);
+	assert.equal(untracked.binary, false);
+	assert.equal(untracked.truncated, false);
+	assert.match(untracked.head, /^diff --git a\/untracked\.txt b\/untracked\.txt\n/);
+	assert.match(untracked.head, /\n\+new\n$/);
+
+	const renamed = changes.files.find((file) => file.path === "new.txt");
+	assert.ok(renamed);
+	assert.match(renamed.status, /^R/);
+});
+
+void test("streams a large diff with exact counts and a bounded head", async () => {
+	const root = await repository();
+	const lines = 200_000;
+	await writeFile(
+		join(root, "big.txt"),
+		`${Array.from({ length: lines }, (_, index) => `line ${index}`).join("\n")}\n`
+	);
+	run(root, "add", ".");
+	run(root, "commit", "-qm", "base");
+	await writeFile(
+		join(root, "big.txt"),
+		`${Array.from({ length: lines }, (_, index) => `LINE ${index}`).join("\n")}\n`
+	);
+	await writeFile(join(root, "small.txt"), "small\n");
+	run(root, "add", ".");
+
+	const changes = await readRepository(root);
+	const big = changes.files.find((file) => file.path === "big.txt");
+	assert.ok(big);
+
+	const [added, deleted] = run(root, "diff", "--cached", "--numstat", "--", "big.txt").split("\t");
+	assert.equal(big.added, Number(added));
+	assert.equal(big.deleted, Number(deleted));
+	assert.equal(big.truncated, true);
+	assert.ok(big.bytes > 4_000_000, `expected a multi-megabyte section, got ${big.bytes}`);
+	assert.ok(Buffer.byteLength(big.head) <= 8_192, `head was ${Buffer.byteLength(big.head)} bytes`);
+	assert.ok(big.head.startsWith("diff --git a/big.txt b/big.txt\n"));
+
+	const total = changes.files.reduce((sum, file) => sum + Buffer.byteLength(file.head), 0);
+	assert.ok(total <= 262_144, `retained ${total} bytes`);
+});
+
+void test("reports binary files without counting lines", async () => {
+	const root = await repository();
+	await writeFile(join(root, "blob.bin"), Buffer.from(Array.from({ length: 4_096 }, (_, index) => index % 251)));
+	run(root, "add", ".");
+
+	const blob = (await readRepository(root)).files.find((file) => file.path === "blob.bin");
+	assert.ok(blob);
+	assert.equal(blob.binary, true);
+	assert.equal(blob.added, 0);
+	assert.equal(blob.deleted, 0);
+});
+
+void test("passes CRLF content and non-ASCII paths through byte-faithfully", async () => {
+	const root = await repository();
+	await writeFile(join(root, "café-üñi.txt"), "alpha\r\nbeta\r\n");
+	run(root, "add", ".");
+
+	const changes = await readRepository(root);
+	const file = changes.files.find((entry) => entry.path === "café-üñi.txt");
+	assert.ok(file, `paths were ${JSON.stringify(changes.paths)}`);
+	assert.equal(file.added, 2);
+	assert.ok(file.head.includes("+alpha\r\n+beta\r\n"), JSON.stringify(file.head));
+	assert.ok(file.head.includes("café-üñi.txt"));
+	assert.ok(!file.head.includes("�"));
+});
+
+void test("keeps retention bounded across many small files", async () => {
+	const root = await repository();
+	const count = 60;
+	for (let index = 0; index < count; index++) {
+		await writeFile(join(root, `file-${index}.txt`), "payload line\n".repeat(200));
+	}
+	run(root, "add", ".");
+
+	const budget = 4_096;
+	const changes = await readRepository(root, false, budget);
+	assert.equal(changes.files.length, count);
+	for (const path of changes.paths)
+		assert.ok(
+			changes.files.some((file) => file.path === path),
+			path
+		);
+
+	const total = changes.files.reduce((sum, file) => sum + Buffer.byteLength(file.head), 0);
+	// The per-file cap has a 256 byte floor, so that is the bound once the budget alone cannot be met.
+	assert.ok(total <= Math.max(budget, 256 * count), `retained ${total} bytes`);
+	for (const file of changes.files) {
+		assert.equal(file.added, 200);
+		assert.equal(file.truncated, true);
+	}
+});
+
+void test("batches pathspecs under the argv budget and keeps rename sides together", () => {
+	const files = ["a.txt", "b.txt", "old.txt", "new.txt", "c.txt"];
+	const batches = batchPathspecs(files, [{ from: "old.txt", to: "new.txt" }], 40);
+
+	assert.ok(batches.length > 1, `expected multiple batches, got ${JSON.stringify(batches)}`);
+	assert.deepEqual(batches.flat().toSorted(), files.toSorted());
+	const pair = batches.find((batch) => batch.includes("old.txt"));
+	assert.ok(pair?.includes("new.txt"), `rename split across batches: ${JSON.stringify(batches)}`);
+	for (const batch of batches) {
+		const size = batch.reduce((total, path) => total + Buffer.byteLength(path) + 8, 0);
+		assert.ok(size <= 40 || batch.length <= 2, `batch too large: ${JSON.stringify(batch)}`);
+	}
+
+	assert.deepEqual(batchPathspecs(files, []), [files]);
 });
 
 void test("split commits preserve binary data and unstaged hunks", async () => {

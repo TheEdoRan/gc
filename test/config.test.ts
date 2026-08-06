@@ -6,10 +6,13 @@ import { test } from "node:test";
 
 import {
 	getConfigPath,
+	mergeConfig,
 	readConfig,
+	readProjectConfig,
 	selectProfile,
 	setupProfile,
 	validateConfig,
+	validateProjectConfig,
 	writeConfig,
 	type Config,
 	type ConfigPrompts,
@@ -57,6 +60,71 @@ void test("rejects unknown fields, missing profiles, and duplicate YAML keys", a
 	const path = join(directory, "config.yaml");
 	await writeFile(path, "activeProfile: one\nactiveProfile: two\nsplit: true\nprofiles: {}\n");
 	await assert.rejects(readConfig(path), /Map keys must be unique/);
+});
+
+void test("round-trips optional profile and content settings", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "gc-optional-"));
+	const path = join(directory, "config.yaml");
+	const extended: Config = {
+		...config,
+		excludeContent: ["dist/**"],
+		includeContent: ["pnpm-lock.yaml"],
+		profiles: { personal: { ...config.profiles.personal!, maxInputTokens: 6000 } },
+	};
+	await writeConfig(extended, path);
+	assert.deepEqual(await readConfig(path), extended);
+	assert.deepEqual(validateConfig(config), config);
+});
+
+void test("rejects invalid maxInputTokens and content globs", () => {
+	for (const maxInputTokens of [0, -1, 1.5, 3_000_000, "6000"]) {
+		assert.throws(
+			() =>
+				validateConfig({
+					...config,
+					profiles: { personal: { ...config.profiles.personal, maxInputTokens } },
+				}),
+			/Invalid maxInputTokens/
+		);
+	}
+	assert.throws(() => validateConfig({ ...config, excludeContent: "dist/**" }), /Invalid excludeContent/);
+	assert.throws(() => validateConfig({ ...config, includeContent: [""] }), /Invalid includeContent/);
+	assert.throws(
+		() => validateConfig({ ...config, profiles: { personal: { ...config.profiles.personal, unknown: 1 } } }),
+		/Invalid profile/
+	);
+	assert.throws(() => validateConfig({ ...config, unknown: 1 }), /Invalid config structure/);
+});
+
+void test("reads a project config and rejects credential keys", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "gc-project-"));
+	assert.equal(await readProjectConfig(directory), undefined);
+
+	const path = join(directory, ".gc.yaml");
+	await writeFile(path, "split: false\nexcludeContent:\n  - dist/**\n");
+	assert.deepEqual(await readProjectConfig(directory), { split: false, excludeContent: ["dist/**"] });
+
+	for (const key of ["apiKey", "profiles", "activeProfile"]) {
+		assert.throws(() => validateProjectConfig({ [key]: "anything" }), /is not allowed in \.gc\.yaml/);
+		assert.throws(() => validateProjectConfig({ [key]: "anything" }), new RegExp(`^Error: ${key} is not allowed`));
+	}
+	assert.throws(() => validateProjectConfig({ unknown: true }), /Invalid project config structure/);
+	assert.throws(() => validateProjectConfig({ split: "yes" }), /Invalid split setting/);
+
+	await writeFile(path, "split: true\nsplit: false\n");
+	await assert.rejects(readProjectConfig(directory), /Map keys must be unique/);
+	await writeFile(path, "excludeContent: &a\n  - dist/**\nincludeContent: *a\n");
+	await assert.rejects(readProjectConfig(directory), /alias/i);
+});
+
+void test("merges project settings over the global config", () => {
+	const global: Config = { ...config, excludeContent: ["dist/**"], includeContent: ["a.txt"] };
+	assert.deepEqual(mergeConfig(global, { excludeContent: ["out/**"], split: false }), {
+		excludeContent: ["dist/**", "out/**"],
+		includeContent: ["a.txt"],
+		split: false,
+	});
+	assert.deepEqual(mergeConfig(config), { excludeContent: [], includeContent: [], split: true });
 });
 
 void test("uses the platform config directory", () => {

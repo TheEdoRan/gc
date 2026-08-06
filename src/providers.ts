@@ -7,6 +7,8 @@ export interface Profile {
 	baseUrl: string;
 	model: string;
 	apiKey: string;
+	maxInputTokens?: number;
+	maxOutputTokens?: number;
 }
 
 export const DEFAULT_BASE_URLS = {
