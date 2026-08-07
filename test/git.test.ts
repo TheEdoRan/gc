@@ -17,6 +17,8 @@ async function repository(): Promise<string> {
 	run(root, "config", "user.name", "GC Test");
 	run(root, "config", "user.email", "gc@example.test");
 	run(root, "config", "commit.gpgsign", "false");
+	// Git for Windows defaults core.autocrlf to true, which would rewrite staged CRLF content as LF.
+	run(root, "config", "core.autocrlf", "false");
 	return root;
 }
 
