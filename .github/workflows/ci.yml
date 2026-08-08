@@ -38,7 +38,8 @@ jobs:
 
   changeset-status:
     name: Changeset status
-    if: github.event_name == 'pull_request'
+    # Release pull requests consume every changeset, which is exactly what this check rejects.
+    if: github.event_name == 'pull_request' && github.head_ref != 'changeset-release/main'
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
