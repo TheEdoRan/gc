@@ -229,8 +229,13 @@ list short.
 | `i` | expanded | Edit the body in place. Opens empty when there is no body. |
 | `g` | expanded | Ask the model to write a body for this commit |
 | `x` | expanded | Drop the body. Shown only when a body exists. |
+| `esc` | generating | Cancel the running body generation. Takes priority over cancelling the review. |
 
 `ctrl+c` cancels, as `@inquirer/core` already arranges.
+
+`esc` is modal. While any body generation is in flight it aborts that request and nothing else. It
+returns to meaning "cancel the review" only once no generation is running. `q` always cancels the
+review, so there is an unambiguous way out either way.
 
 ### Color
 
@@ -292,12 +297,27 @@ export async function generateCommitBody(input: {
 - It reuses `modelFor`, `classifyFailure`, and `REQUEST_TIMEOUT_MS`. It does not reuse the retry
   state machine: one attempt, and a failure is reported rather than retried. The user can press `g`
   again.
-- While it runs, the expanded row shows its own inline spinner. The rest of the list stays
-  navigable and readable. Keys that would mutate that row (`i`, `g`, `x`, `e`, `ctrl+e`) are ignored
-  until it settles; `↵` is also ignored, so a plan is never committed mid-generation.
+- While it runs, the row shows its own inline spinner and the hint line states how to stop it. The
+  rest of the list stays navigable and readable. Keys that would mutate that row (`i`, `g`, `x`,
+  `e`, `ctrl+e`) are ignored until it settles; `↵` is also ignored, so a plan is never committed
+  mid-generation.
+
+  ```
+  ❯ fix(git): keep rename pairs in one batch
+    ⠹ writing body · 3s
+      src/git.ts
+
+    space collapse · esc cancel generation · ctrl+e editor
+  ```
+
+- `esc` aborts it. The `signal` passed to `generateCommitBody` is triggered, the row returns to its
+  previous state, and no error is reported: the user asked for this. The abort is reachable from
+  anywhere in the list, including after collapsing or moving away, since the hint line names it
+  wherever the affected row is visible and `esc` is captured globally while a generation is in
+  flight.
 - On failure, a red single-line message appears on the row. Nothing else changes.
 - Collapsing or moving away does not cancel the request. The result lands on the row when it
-  arrives.
+  arrives. Only `esc` cancels it.
 
 ## Section 3: opt-in bodies
 
@@ -428,7 +448,7 @@ All tests use `node:test`. No test makes a live provider call, per the repositor
 | Module | What is tested |
 | --- | --- |
 | `src/textarea.ts` | Insert, backspace, delete, arrow, home, and end, as a pure state machine. Multi-byte characters are not split. |
-| `src/review.ts` | `reduce` key by key: navigation, expand and collapse, that `i`, `g`, and `x` are ignored while collapsed, that `x` is ignored with no body, that mutating keys are ignored while a body is generating. `render` output for the collapsed, expanded-with-body, and expanded-without-body states at a fixed width. |
+| `src/review.ts` | `reduce` key by key: navigation, expand and collapse, that `i`, `g`, and `x` are ignored while collapsed, that `x` is ignored with no body, that mutating keys are ignored while a body is generating, that `esc` aborts a running generation instead of cancelling the review, and that `esc` cancels the review once none is running. `render` output for the collapsed, expanded-with-body, expanded-without-body, and generating states at a fixed width. |
 | `src/terminal.ts` | `NO_COLOR` and a non-TTY `stderr` both produce plain text with no escape sequences. Frame selection advances. |
 | `src/ai.ts` | Subjects extracted from a fake partial stream, in both the schema and the plain-text readers. `manual` clears bodies in `validatePlan` and `validateGroupPlan`. `generateCommitBody` against a local server double. |
 | `src/config.ts` | `body` defaults to `manual` when absent, rejects an unknown value, is accepted in `.gc.yaml`, and is overridden rather than merged. |
