@@ -236,6 +236,13 @@ void test("parseRepository keeps both sides of a rename", async () => {
 	const { from, to } = changes.renames[0]!;
 	assert.ok(changes.paths.includes(from));
 	assert.ok(changes.paths.includes(to));
+	// Two paths, one record: the `to` side carries the diff. Callers that index files by path have
+	// to expect the `from` side to resolve to nothing.
+	assert.equal(changes.files.length, changes.paths.length - changes.renames.length);
+	assert.deepEqual(
+		changes.files.map((file) => file.path),
+		[to]
+	);
 });
 
 void test("parseRepository reports every staged path", async () => {

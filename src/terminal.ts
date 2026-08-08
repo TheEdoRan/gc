@@ -72,8 +72,10 @@ export function createSpinner(terminal: Terminal, model: string): Spinner {
 
 	function draw() {
 		const lines = [headline(), ...(subjects.length ? [""] : [])];
+		// `entries()` walks holes as `undefined`, and a producer that reports index 1 before index 0
+		// leaves one. An empty row is the honest rendering of a subject that has not arrived.
 		for (const [index, subject] of subjects.entries()) {
-			lines.push(`  ${paint(terminal, "dim", String(index + 1))}  ${subject}`);
+			lines.push(`  ${paint(terminal, "dim", String(index + 1))}  ${subject ?? ""}`);
 		}
 		write(`${eraseLines(drawn)}${lines.join("\n")}\n`);
 		drawn = lines.length;

@@ -6,12 +6,13 @@
 import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 
-import { generateCommitBody, generateCommitPlan, type CommitPlan, type PlanEvent } from "../src/ai.ts";
+import { createBodyGenerator, generateCommitPlan, type CommitPlan, type PlanEvent } from "../src/ai.ts";
 import { BODY_MODES, mergeConfig, readConfig, readProjectConfig, type BodyMode, type Profile } from "../src/config.ts";
 import { discoverContext } from "../src/context.ts";
 import { parseRepository } from "../src/git.ts";
 import { reviewCommits } from "../src/review.ts";
 import { createSpinner, createTerminal } from "../src/terminal.ts";
+import { resolveDemoOptions } from "./demo-options.ts";
 
 const FIXTURES = new URL("../test/fixtures/staged/", import.meta.url);
 
@@ -38,6 +39,7 @@ const [diff, names, historyJson, planJson] = await Promise.all([
 ]);
 
 const repository = parseRepository(diff, names, JSON.parse(historyJson) as string[]);
+const renames: Array<[string, string]> = repository.renames.map(({ from, to }) => [from, to]);
 const canned = JSON.parse(planJson) as CommitPlan;
 const root = process.cwd();
 const context = await discoverContext(root, repository.paths);
@@ -46,8 +48,10 @@ const context = await discoverContext(root, repository.paths);
 // A minimal stand-in config is used when no user config exists, since offline mode must not require one.
 const config = await readConfig();
 const merged = mergeConfig(config ?? { activeProfile: "", split: true, profiles: {} }, await readProjectConfig(root));
-const split = values.split ?? merged.split;
-const body: BodyMode = (values.body as BodyMode | undefined) ?? merged.body;
+const { split, body } = resolveDemoOptions(
+	{ offline: values.offline, split: values.split, body: values.body as BodyMode | undefined },
+	merged
+);
 
 /** Type the canned subjects out so the streaming display has something to show. */
 async function replay(onProgress?: (event: PlanEvent) => void) {
@@ -88,7 +92,7 @@ try {
 			: (liveProfile as Profile),
 		files: repository.files,
 		paths: repository.paths,
-		renames: repository.renames.map(({ from, to }) => [from, to]),
+		renames,
 		history: repository.history,
 		context,
 		split,
@@ -118,8 +122,13 @@ const { outcome, commits } = await reviewCommits({
 				});
 				return "A canned body, written slowly so the row spinner and esc can be exercised.";
 			}
-		: (_index, subject, signal) =>
-				generateCommitBody({ profile: liveProfile as Profile, subject, files: repository.files, context, signal }),
+		: createBodyGenerator({
+				profile: liveProfile as Profile,
+				plan,
+				files: repository.files,
+				renames,
+				context,
+			}),
 });
 if (outcome !== "commit") {
 	process.stdout.write(`${outcome}\n`);

@@ -40,6 +40,27 @@ test("frames advance and wrap", () => {
 	assert.notEqual(frameAt(0), frameAt(1));
 });
 
+/**
+ * The redrawing path, which the non-interactive test above cannot reach. A skipped index is the
+ * case the streamed subjects can produce: nothing promises the model writes commit 1's subject
+ * after commit 0's, and an array hole renders as the literal string `undefined`.
+ */
+test("an interactive spinner hides the cursor, redraws, and leaves no hole showing", () => {
+	const tty = sink();
+	tty.stream.isTTY = true;
+	const spinner = createSpinner(createTerminal(tty.stream, {}), "gpt-5");
+	spinner.phase("writing plan");
+	spinner.subject(1, "fix: second");
+	spinner.stop();
+
+	const output = tty.text();
+	assert.match(output, /\[\?25l/, "the cursor is hidden while the region is live");
+	assert.match(output, /writing plan/);
+	assert.match(output, /fix: second/);
+	assert.doesNotMatch(output, /undefined/, "the unwritten row is blank, not the word undefined");
+	assert.match(output, /\[\?25h/, "and the cursor comes back");
+});
+
 test("a non-interactive spinner writes plain lines and no escape sequences", () => {
 	const plain = sink();
 	const spinner = createSpinner(createTerminal(plain.stream, {}), "gpt-5");

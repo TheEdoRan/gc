@@ -52,20 +52,36 @@ Before changing Git history, `gc` shows every proposed message and file group in
 | `space`         | Expand the selected commit: full body and full file list |
 | `e`             | Edit the subject in place                                |
 | `ctrl+e`        | Open subject and body together in `$VISUAL` or `$EDITOR` |
-| `r`             | Regenerate the whole plan                                |
+| `r`             | Throw the plan away and ask the model for another        |
 | `↵`             | Create the commits                                       |
-| `q`             | Cancel without committing                                |
+| `q` `esc`       | Cancel without committing                                |
+
+`r` is the only action that cannot be undone, and it sits one key away from `e`. It discards every subject you edited,
+every body you wrote by hand, and every body you spent a request on with `g`. It asks for no confirmation.
 
 Body actions live in the expanded view, so the collapsed list stays short:
 
-| Key   | Action                                                  |
-| ----- | ------------------------------------------------------- |
-| `i`   | Edit the body in place, or write one when there is none |
-| `g`   | Ask the model to write a body for this commit           |
-| `x`   | Drop the body                                           |
-| `esc` | Stop a body the model is currently writing              |
+| Key | Action                                                  |
+| --- | ------------------------------------------------------- |
+| `i` | Edit the body in place, or write one when there is none |
+| `g` | Ask the model to write a body for this commit           |
+| `x` | Drop the body                                           |
 
-`esc` cancels the review when no body is being written.
+While the model is writing a body, only `↑` `↓` `j` `k`, `space`, `esc`, and `q` answer: nothing that would change the
+plan under the request runs. `esc` is modal in the list, so it stops that body first and cancels the review only once
+none is being written.
+
+Both editors are modal too, and both leave the commit as it was when you cancel:
+
+| Key      | In the subject editor (`e`)     | In the body editor (`i`)      |
+| -------- | ------------------------------- | ----------------------------- |
+| `↵`      | Save the subject                | Insert a newline              |
+| `ctrl+d` | Nothing                         | Save the body                 |
+| `ctrl+e` | Nothing                         | Open the body in `$EDITOR`    |
+| `↑` `↓`  | Nothing                         | Move between the body's lines |
+| `esc`    | Cancel, keeping the old subject | Cancel, keeping the old body  |
+
+`ctrl+e` is therefore available from the list and from the body editor, but not from the subject editor.
 
 Every commit uses normal `git commit`, so existing hooks and signing configuration still apply. If a later commit in a
 split plan fails, earlier successful commits remain and all uncommitted patches are restored to the index.

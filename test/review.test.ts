@@ -539,10 +539,12 @@ test(
 		// A generator that refuses says so on the row and leaves the body that was already there.
 		// generateCommitBody rejects rather than answering with an empty string for exactly this reason.
 		await terminal.send("down", "space", "g");
-		refuse!(new Error("The model returned an empty body."));
+		refuse!(new Error("the model had nothing to add beyond the subject"));
 		const refused = await terminal.wait(20);
 		const refusedText = refused.lines.join("\n");
-		assert.match(refusedText, /Could not write a body: Error: The model returned an empty body\./);
+		// The reason alone: an "Error:" prefix would read as a provider crash rather than as an answer.
+		assert.match(refusedText, /Could not write a body: the model had nothing to add beyond the subject/);
+		assert.doesNotMatch(refusedText, /Could not write a body: Error/);
 		assert.match(refusedText, /^ {2}│ A body the model wrote\.$/m, "the body that was there survived");
 		assert.doesNotMatch(refusedText, /writing body…/);
 

@@ -22,6 +22,9 @@ test("parses public CLI arguments", () => {
 test("parses the body flag", () => {
 	assert.deepEqual(parseCliArgs(["--body", "always"]), { command: "commit", all: false, body: "always" });
 	assert.throws(() => parseCliArgs(["--body", "sometimes"]), /manual, auto, always/);
+	// The subcommands take no commit options, and --body is one of them.
+	assert.throws(() => parseCliArgs(["init", "--body", "auto"]), /cannot be used with gc init/);
+	assert.throws(() => parseCliArgs(["profile", "--body", "auto"]), /cannot be used with gc profile/);
 });
 
 test("the review prompt replaces the old preview helpers", async () => {

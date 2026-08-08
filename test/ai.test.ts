@@ -4,6 +4,7 @@ import { test } from "node:test";
 
 import {
 	classifyFailure,
+	createBodyGenerator,
 	extractJsonObject,
 	extractSubjects,
 	generateCommitBody,
@@ -534,9 +535,14 @@ function planFrom(baseUrl: string, onProgress: (event: PlanEvent) => void) {
 	});
 }
 
-void test("streams subjects from the provider and keeps failure classification intact", async (t) => {
+test("streams subjects from the provider and keeps failure classification intact", { timeout: 10_000 }, async (t) => {
 	// The compatible provider warns that it cannot enforce a schema, which is noise here.
-	(globalThis as { AI_SDK_LOG_WARNINGS?: boolean }).AI_SDK_LOG_WARNINGS = false;
+	const warnings = globalThis as { AI_SDK_LOG_WARNINGS?: boolean | undefined };
+	const previousWarnings = warnings.AI_SDK_LOG_WARNINGS;
+	warnings.AI_SDK_LOG_WARNINGS = false;
+	t.after(() => {
+		warnings.AI_SDK_LOG_WARNINGS = previousWarnings;
+	});
 	await new Promise<void>((resolve) => streamServer.listen(0, "127.0.0.1", resolve));
 	t.after(() => streamServer.close());
 	const address = streamServer.address();
@@ -558,6 +564,15 @@ void test("streams subjects from the provider and keeps failure classification i
 	respond = (response) => sendStream(response, ["```json\n", streamingPlan, "\n```"]);
 	assert.equal((await planFrom(baseUrl, () => {})).commits[0]?.subject, "feat: streamed");
 
+	// A rendering bug in a progress consumer is not a provider failure. Unguarded it escapes the
+	// stream loop, is classified transient, and is retried until the local fallback wins.
+	respond = (response) => sendStream(response, pieces);
+	const despiteConsumer = await planFrom(baseUrl, () => {
+		throw new Error("the display exploded");
+	});
+	assert.equal(despiteConsumer.commits[0]?.subject, "feat: streamed");
+	assert.equal(despiteConsumer.fallback, undefined);
+
 	// A credential failure must still reach classifyFailure as itself, not as a stream-ended error.
 	respond = (response) => {
 		response.writeHead(401, { "content-type": "application/json" });
@@ -567,6 +582,31 @@ void test("streams subjects from the provider and keeps failure classification i
 		planFrom(baseUrl, () => {}),
 		/Unauthorized/
 	);
+
+	/*
+	 * And again on the plain-text path, which is the live one for every endpoint that refuses the
+	 * schema: the first reply drops generateCommitPlan out of structured mode, so the 401 that
+	 * follows arrives at the reader that has no `output` on it. Both readers must rethrow what
+	 * `onError` captured before awaiting anything on the result, because after a stream has ended in
+	 * an error those promises reject with a status-less "no output generated" that classifyFailure
+	 * reads as transient: four blind retries and a silent local `chore:` plan on a dead key.
+	 */
+	let call = 0;
+	respond = (response) => {
+		const refusal =
+			++call === 1
+				? { status: 400, message: "response_format json_schema is not supported by this model" }
+				: { status: 401, message: "Unauthorized while streaming plain text" };
+		response.writeHead(refusal.status, { "content-type": "application/json" });
+		response.end(JSON.stringify({ error: { message: refusal.message } }));
+	};
+	await assert.rejects(
+		planFrom(baseUrl, () => {}),
+		/Unauthorized while streaming plain text/
+	);
+	// Two requests, not four: a 401 read as transient would have been repeated until the budget ran
+	// out and a local `chore:` plan came back in place of the error.
+	assert.equal(call, 2, "the 401 was fatal on the plain-text path too, not retried into a fallback");
 });
 
 /** Ask the double for a body, so the cases below differ only in what the model replied. */
@@ -606,8 +646,8 @@ test("generateCommitBody strips a repeated subject only when the whole line repe
 	assert.equal(await bodyFrom(punctuated, subject), punctuated, "neither is the subject plus a full stop");
 
 	// A reply that is the subject and nothing else leaves no body at all, which must not be written.
-	await assert.rejects(bodyFrom(subject, subject), /empty body/);
-	await assert.rejects(bodyFrom(`  ${subject}  \n\n `, subject), /empty body/);
+	await assert.rejects(bodyFrom(subject, subject), /nothing to add/);
+	await assert.rejects(bodyFrom(`  ${subject}  \n\n `, subject), /nothing to add/);
 });
 
 /**
@@ -616,8 +656,8 @@ test("generateCommitBody strips a repeated subject only when the whole line repe
  * character produces exactly that, which is why this is a rejection rather than an empty string.
  */
 test("generateCommitBody refuses an empty answer instead of returning one", { timeout: 10_000 }, async () => {
-	await assert.rejects(bodyFrom(""), /empty body/);
-	await assert.rejects(bodyFrom("   \n\n  "), /empty body/);
+	await assert.rejects(bodyFrom(""), /nothing to add/);
+	await assert.rejects(bodyFrom("   \n\n  "), /nothing to add/);
 });
 
 test(
@@ -643,6 +683,42 @@ test(
 		}
 	}
 );
+
+/**
+ * The CLI and `pnpm demo` share this, because the harness online is the only end-to-end exercise
+ * `generateCommitBody` gets: a harness that sends the whole staged set validates a prompt nobody
+ * ships. A rename is the case the scoping used to lose, since it contributes two paths but one
+ * staged record.
+ */
+test("the shared body generator sends one commit's files, old rename paths included", { timeout: 10_000 }, async () => {
+	const server = await startProviderDouble({ content: "Because the old name no longer fit." });
+	try {
+		const generate = createBodyGenerator({
+			profile: { provider: "compatible", baseUrl: server.baseUrl, model: "m", apiKey: "k" },
+			plan: {
+				commits: [
+					{ subject: "refactor: rename greet to hello", body: "", files: ["src/greet.ts", "src/hello.ts"] },
+					{ subject: "docs: refresh the readme", body: "", files: ["README.md"] },
+				],
+			},
+			files: [staged("src/hello.ts"), staged("README.md")],
+			renames: [["src/greet.ts", "src/hello.ts"]],
+			context,
+		});
+
+		const body = await generate(0, "refactor: rename greet to hello", new AbortController().signal);
+		assert.equal(body, "Because the old name no longer fit.");
+
+		const prompt = server.asked[0] ?? "";
+		assert.match(prompt, /src\/hello\.ts/, "the commit's own file is there");
+		assert.match(prompt, /src\/greet\.ts -> src\/hello\.ts/, "and so is the path it replaced");
+		assert.doesNotMatch(prompt, /README\.md/, "the other commit's files are not");
+
+		await assert.rejects(generate(9, "feat: nothing", new AbortController().signal), /No such commit/);
+	} finally {
+		await server.close();
+	}
+});
 
 test("generateCommitBody honours an abort signal", { timeout: 10_000 }, async () => {
 	const server = await startProviderDouble({ delayMs: 5_000, content: "late" });

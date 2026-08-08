@@ -474,7 +474,11 @@ export const reviewCommits = createPrompt<ReviewResult, ReviewConfig>((config, d
 							setState({
 								...latest.current,
 								generating: null,
-								error: abort.signal.aborted ? null : `Could not write a body: ${String(error)}`,
+								// The message alone: `String(error)` prefixes "Error:", which reads as a crash
+								// even when the model simply had nothing to say.
+								error: abort.signal.aborted
+									? null
+									: `Could not write a body: ${error instanceof Error ? error.message : String(error)}`,
 							})
 					)
 					.finally(() => setController(null));
