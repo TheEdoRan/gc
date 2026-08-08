@@ -98,7 +98,13 @@ function reduceBody(state: ReviewState, key: ReviewKey, live: Live): [ReviewStat
 		return [{ ...withCommit(state, state.index, { body: text }), mode: "list", buffer: null }, NONE];
 	}
 
-	if (key.ctrl && key.name === "e") return [state, { type: "editor", index: state.index }];
+	// The live line is banked first, so the external editor is seeded with what is on screen.
+	if (key.ctrl && key.name === "e") {
+		return [
+			{ ...state, buffer: setLine(buffer, live.text) },
+			{ type: "editor", index: state.index },
+		];
+	}
 
 	if (key.name === "return") {
 		const next = splitLine(setLine(buffer, live.text), live.text, live.column);
@@ -242,8 +248,13 @@ function hint(state: ReviewState): string {
 }
 
 /**
- * Returns `[content, bottom]`. Inquirer leaves the terminal cursor at the end of `content`, so an
- * active editor renders up to the cursor column in `content` and the remainder in `bottom`.
+ * Returns `[content, bottom]`.
+ *
+ * Inquirer's screen manager takes the LAST line of `content` as the prompt line, strips
+ * `rl.line.length` characters off its end to recover the prefix, and puts the terminal cursor at
+ * that prefix width plus `rl.cursor`. So the whole live line belongs at the end of `content`, the
+ * prefix in front of it must be exactly what the row is indented with, and every line below the
+ * cursor row belongs in `bottom`, which the screen manager writes after a newline of its own.
  */
 export function render(state: ReviewState, live: Live, terminal: Terminal, width: number): [string, string] {
 	const body = Math.max(20, width - 6);
@@ -259,19 +270,19 @@ export function render(state: ReviewState, live: Live, terminal: Terminal, width
 	if (state.notice) lines.push(paint(terminal, "dim", `  ${state.notice}`));
 	lines.push("");
 
-	let tail = "";
+	// The row the terminal cursor belongs on, or -1 when no editor is open.
+	let cursorLine = -1;
 	for (const [index, commit] of state.commits.entries()) {
 		const selected = index === state.index;
 		const expanded = state.expanded === index;
 		const marker = selected ? paint(terminal, "cyan", "❯") : " ";
 
 		if (selected && state.mode === "subject") {
-			// Split at the cursor so inquirer's cursor lands in the right place.
-			lines.push(`${marker} ${live.text.slice(0, live.column)}`);
-			tail = live.text.slice(live.column);
+			cursorLine = lines.length;
+			lines.push(`${marker} ${live.text}`);
 		} else {
-			const badge =
-				!expanded && commit.body ? paint(terminal, "dim", `  ¶ ${commit.body.split("\n").length} lines`) : "";
+			const rows = commit.body.split("\n").length;
+			const badge = !expanded && commit.body ? paint(terminal, "dim", `  ¶ ${rows} line${rows === 1 ? "" : "s"}`) : "";
 			lines.push(`${marker} ${paintSubject(terminal, commit.subject)}${badge}`);
 		}
 
@@ -281,14 +292,10 @@ export function render(state: ReviewState, live: Live, terminal: Terminal, width
 			lines.push(paint(terminal, "dim", "    writing body…"));
 		} else if (expanded && state.mode === "body" && state.buffer) {
 			const buffer = state.buffer;
-			for (const [row, text] of buffer.lines.entries()) {
-				if (row < buffer.row) lines.push(paint(terminal, "dim", `  │ ${text}`));
-			}
-			lines.push(`  ${paint(terminal, "dim", "│")} ${live.text.slice(0, live.column)}`);
-			tail = `${live.text.slice(live.column)}\n${buffer.lines
-				.slice(buffer.row + 1)
-				.map((text) => `  │ ${text}`)
-				.join("\n")}`;
+			for (const text of buffer.lines.slice(0, buffer.row)) lines.push(paint(terminal, "dim", `  │ ${text}`));
+			cursorLine = lines.length;
+			lines.push(`  ${paint(terminal, "dim", "│")} ${live.text}`);
+			for (const text of buffer.lines.slice(buffer.row + 1)) lines.push(paint(terminal, "dim", `  │ ${text}`));
 		} else if (expanded) {
 			const text = commit.body || "No body for this commit";
 			for (const line of wrap(text, body)) lines.push(paint(terminal, "dim", `  │ ${line}`));
@@ -301,7 +308,9 @@ export function render(state: ReviewState, live: Live, terminal: Terminal, width
 	}
 
 	if (state.error) lines.push(paint(terminal, "red", `  ${state.error}`));
+	const footer = paint(terminal, "dim", `  ${hint(state)}`);
 
-	const bottom = `${tail ? `${tail}\n` : ""}${paint(terminal, "dim", `  ${hint(state)}`)}`;
-	return [lines.join("\n"), bottom];
+	// Content has to end on the cursor row, so everything below it becomes bottom content.
+	if (cursorLine < 0) return [lines.join("\n"), footer];
+	return [lines.slice(0, cursorLine + 1).join("\n"), [...lines.slice(cursorLine + 1), footer].join("\n")];
 }

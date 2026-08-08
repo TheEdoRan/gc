@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
+import { stripVTControlCharacters } from "node:util";
 
 import type { CommitPlan } from "../src/ai.ts";
 import { initialState, reduce, render, type ReviewKey, type ReviewState } from "../src/review.ts";
@@ -24,6 +25,16 @@ function press(state: ReviewState, ...names: string[]) {
 	return current;
 }
 
+/**
+ * What @inquirer/core's ScreenManager does with `content`: it takes the last line, strips the escape
+ * sequences, and cuts `rl.line.length` characters off the end. What remains is the prompt it hands
+ * to readline, and its width is the column the terminal cursor starts from.
+ */
+function promptOf(content: string, line: string): string {
+	const last = stripVTControlCharacters(content.split("\n").pop() ?? "");
+	return line.length > 0 ? last.slice(0, -line.length) : last;
+}
+
 test("navigation moves and collapses", () => {
 	const start = initialState(plan);
 	assert.equal(start.index, 0);
@@ -38,7 +49,8 @@ test("navigation moves and collapses", () => {
 test("body keys do nothing while the row is collapsed", () => {
 	const start = initialState(plan);
 	assert.equal(press(start, "i").mode, "list");
-	assert.equal(press(start, "x").commits[0]?.body, "");
+	// Row 1 is the one with a body, so this fails loudly if a collapsed x ever fires.
+	assert.equal(press(start, "down", "x").commits[1]?.body, "Because the pairing is lost.");
 	assert.deepEqual(reduce(start, key("g"), idle)[1], { type: "none" });
 });
 
@@ -132,6 +144,7 @@ test("render shows the collapsed list, then the body, then the empty-body notice
 	assert.doesNotMatch(collapsed, /Because the pairing is lost/, "a collapsed body stays hidden");
 	assert.match(collapsed, /2 commits/);
 	assert.match(collapsed, /2 files shown in full/);
+	assert.match(collapsed, /¶ 1 line$/m, "a one-line body badge does not read '1 lines'");
 	assert.doesNotMatch(collapsed, /\u001b/, "no colour without a TTY");
 
 	const [withBody] = render(press(start, "down", "space"), idle, plain, 80);
@@ -231,4 +244,69 @@ test("render survives odd commits and narrow terminals", () => {
 test("the generating row is marked even when the selection moved away", () => {
 	const generating: ReviewState = { ...initialState(plan), generating: 1 };
 	assert.match(render(generating, idle, plain, 80)[0], /writing body/);
+});
+
+test("content ends on the edited subject line, whole and prefixed", () => {
+	const [editing] = reduce(initialState(plan), key("e"), idle);
+	const text = "feat(cli): add the list";
+
+	for (const column of [0, 7, text.length]) {
+		const [content, bottom] = render(editing, { text, column }, plain, 80);
+		const where = `column ${column}`;
+		assert.equal(content.split("\n").pop(), `❯ ${text}`, `${where}: the live line ends the content, whole`);
+		assert.equal(promptOf(content, text), "❯ ", `${where}: inquirer recovers the row prefix`);
+		assert.doesNotMatch(content, /keep renames together/, `${where}: later rows sit below the cursor`);
+		assert.match(bottom, /src\/cli\.ts/, `${where}: the file line of the edited row moved down`);
+		assert.match(bottom, /keep renames together/, `${where}: so did the rest of the list`);
+		assert.match(bottom, /↵ save/, `${where}: the hint stays last`);
+	}
+});
+
+test("content ends on the edited body line, with the rest of the buffer below it", () => {
+	const [editing] = reduce(press(initialState(plan), "down", "space"), key("i"), idle);
+	const [split] = reduce(editing, key("return"), { text: "first second", column: 5 });
+	const text = " second";
+
+	for (const column of [0, 3, text.length]) {
+		const [content, bottom] = render(split, { text, column }, plain, 80);
+		const where = `column ${column}`;
+		assert.equal(content.split("\n").pop(), `  │ ${text}`, `${where}: the live line ends the content, whole`);
+		assert.equal(promptOf(content, text), "  │ ", `${where}: inquirer recovers the row prefix`);
+		assert.match(content, /│ first/, `${where}: the rows above the cursor stay in the content`);
+		assert.match(bottom, /src\/git\.ts/, `${where}: the file line moved down`);
+		assert.match(bottom, /ctrl\+d save/, `${where}: the hint stays last`);
+	}
+
+	const [back] = reduce(split, key("up"), { text, column: 0 });
+	const [content, bottom] = render(back, { text: "first", column: 2 }, plain, 80);
+	assert.equal(content.split("\n").pop(), "  │ first", "editing row 0 ends the content there");
+	assert.equal(bottom.split("\n")[0], `  │ ${text}`, "the rows below the cursor lead the bottom content");
+});
+
+test("the fallback banner names the reason once", () => {
+	const reported = initialState({
+		commits: plan.commits,
+		fallback: true,
+		failureReason: "the provider ran out of time",
+	});
+	assert.match(render(reported, idle, plain, 80)[0], /^! local fallback: the provider ran out of time$/m);
+
+	const silent = initialState({ commits: plan.commits, fallback: true });
+	assert.match(render(silent, idle, plain, 80)[0], /^! local fallback: the provider did not return a plan$/m);
+});
+
+test("escape in the body editor throws the edit away", () => {
+	const [writing] = reduce(press(initialState(plan), "down", "space"), key("i"), idle);
+	const [cancelled, effect] = reduce(writing, key("escape"), { text: "half a thought", column: 14 });
+	assert.equal(cancelled.mode, "list");
+	assert.equal(cancelled.buffer, null);
+	assert.equal(cancelled.commits[1]?.body, "Because the pairing is lost.", "the commit keeps its old body");
+	assert.deepEqual(effect, { type: "none" });
+});
+
+test("ctrl+e in the body editor banks what was typed", () => {
+	const [writing] = reduce(press(initialState(plan), "down", "space"), key("i"), idle);
+	const [next, effect] = reduce(writing, key("e", true), { text: "typed but not saved", column: 19 });
+	assert.deepEqual(effect, { type: "editor", index: 1 });
+	assert.deepEqual(next.buffer, { lines: ["typed but not saved"], row: 0 }, "the external editor sees the live line");
 });
