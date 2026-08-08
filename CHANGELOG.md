@@ -1,5 +1,11 @@
 # @theedoran/gc
 
+## 0.2.1
+
+### Patch Changes
+
+- 93183e6: Lower the supported Node.js floor to 22.13.0, since the CLI does not use any Node.js 26 API.
+
 ## 0.2.0
 
 ### Minor Changes
