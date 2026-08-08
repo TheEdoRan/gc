@@ -4,7 +4,7 @@ export default defineConfig({
 	entry: "src/index.ts",
 	format: "esm",
 	platform: "node",
-	target: "node26",
+	target: "node22.13",
 	outDir: "dist",
 	clean: true,
 	dts: false,
