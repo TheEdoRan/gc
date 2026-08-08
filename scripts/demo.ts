@@ -6,7 +6,7 @@
 import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 
-import { generateCommitPlan, type CommitPlan, type PlanEvent } from "../src/ai.ts";
+import { generateCommitBody, generateCommitPlan, type CommitPlan, type PlanEvent } from "../src/ai.ts";
 import { BODY_MODES, mergeConfig, readConfig, readProjectConfig, type BodyMode, type Profile } from "../src/config.ts";
 import { discoverContext } from "../src/context.ts";
 import { parseRepository } from "../src/git.ts";
@@ -104,7 +104,23 @@ try {
 	spinner.stop();
 }
 
-const { outcome, commits } = await reviewCommits({ plan });
+const { outcome, commits } = await reviewCommits({
+	plan,
+	onGenerate: values.offline
+		? async (_index, _subject, signal) => {
+				// Slow on purpose, so the row spinner and esc can both be exercised by hand.
+				await new Promise((resolve, reject) => {
+					const timer = setTimeout(resolve, 2_000);
+					signal.addEventListener("abort", () => {
+						clearTimeout(timer);
+						reject(signal.reason as Error);
+					});
+				});
+				return "A canned body, written slowly so the row spinner and esc can be exercised.";
+			}
+		: (_index, subject, signal) =>
+				generateCommitBody({ profile: liveProfile as Profile, subject, files: repository.files, context, signal }),
+});
 if (outcome !== "commit") {
 	process.stdout.write(`${outcome}\n`);
 } else {

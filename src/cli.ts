@@ -1,7 +1,7 @@
 import { parseArgs } from "node:util";
 
 import packageJson from "../package.json" with { type: "json" };
-import { DEFAULT_MAX_INPUT_TOKENS, generateCommitPlan, type CommitPlan } from "./ai.ts";
+import { DEFAULT_MAX_INPUT_TOKENS, generateCommitBody, generateCommitPlan, type CommitPlan } from "./ai.ts";
 import {
 	BODY_MODES,
 	mergeConfig,
@@ -114,6 +114,7 @@ export async function run(args = process.argv.slice(2)): Promise<void> {
 	boot.phase("reading project context");
 	const context = await discoverContext(repository.root, repository.paths).finally(() => boot.stop());
 	const split = options.split ?? merged.split;
+	const byPath = new Map(repository.files.map((file) => [file.path, file]));
 
 	for (;;) {
 		// A reasoning model can think for a minute before its first token. Without a spinner the
@@ -144,7 +145,24 @@ export async function run(args = process.argv.slice(2)): Promise<void> {
 		} finally {
 			spinner.stop();
 		}
-		const { outcome, commits } = await reviewCommits({ plan });
+		const { outcome, commits } = await reviewCommits({
+			plan,
+			// The subject comes from the list, not from `plan`, so a subject edited in place is the
+			// one the model is asked to write a body for. The files still come from the plan, which
+			// is correct: the list never changes which files belong to which commit.
+			onGenerate: (index, subject, signal) => {
+				const commit = plan.commits[index];
+				if (!commit) throw new Error("No such commit.");
+				return generateCommitBody({
+					profile,
+					subject,
+					files: commit.files.map((path) => byPath.get(path)).filter((file) => file !== undefined),
+					context,
+					signal,
+					...(options.instructions ? { instructions: options.instructions } : {}),
+				});
+			},
+		});
 		if (outcome === "regenerate") continue;
 		if (outcome === "cancel") return void process.stdout.write("Cancelled.\n");
 		await createCommits(repository.root, commits);

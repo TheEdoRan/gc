@@ -6,6 +6,7 @@ import {
 	classifyFailure,
 	extractJsonObject,
 	extractSubjects,
+	generateCommitBody,
 	generateCommitPlan,
 	validateGroupPlan,
 	validatePlan,
@@ -13,6 +14,45 @@ import {
 } from "../src/ai.ts";
 import type { Profile } from "../src/config.ts";
 import type { StagedFile } from "../src/git.ts";
+
+/**
+ * A local OpenAI-shaped chat-completions endpoint. Never reaches the network: the profile under
+ * test points at this server's own address. The profiles below name the `compatible` provider,
+ * which is the one that speaks chat completions; `openai` defaults to the Responses API and would
+ * need a second wire format for no extra coverage of gc itself. `closeAllConnections` is what keeps
+ * the suite from hanging, since the undici pool keeps a socket alive after a successful reply and a
+ * plain `close()` would wait on it for ever.
+ */
+async function startProviderDouble(options: { content: string; delayMs?: number }) {
+	const server = createServer((request, response) => {
+		const send = () => {
+			response.writeHead(200, { "content-type": "application/json" });
+			response.end(
+				JSON.stringify({
+					id: "double",
+					object: "chat.completion",
+					model: "m",
+					choices: [{ index: 0, message: { role: "assistant", content: options.content }, finish_reason: "stop" }],
+					usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+				})
+			);
+		};
+		request.resume();
+		if (options.delayMs) setTimeout(send, options.delayMs).unref();
+		else request.on("end", send);
+	});
+	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const address = server.address();
+	assert(address && typeof address === "object");
+	return {
+		baseUrl: `http://127.0.0.1:${address.port}/v1`,
+		close: () =>
+			new Promise<void>((resolve) => {
+				server.closeAllConnections();
+				server.close(() => resolve());
+			}),
+	};
+}
 
 const profile: Profile = {
 	provider: "openai",
@@ -518,4 +558,43 @@ void test("streams subjects from the provider and keeps failure classification i
 		planFrom(baseUrl, () => {}),
 		/Unauthorized/
 	);
+});
+
+test("generateCommitBody returns the model's prose and drops a repeated subject", async () => {
+	const server = await startProviderDouble({
+		content: "feat: x\n\nBecause the old path could not express it.",
+	});
+	try {
+		const body = await generateCommitBody({
+			profile: { provider: "compatible", baseUrl: server.baseUrl, model: "m", apiKey: "k" },
+			subject: "feat: x",
+			files: [
+				{ path: "a.ts", status: "M", added: 1, deleted: 0, bytes: 10, head: "", truncated: false, binary: false },
+			],
+			context: { root: "/r", instructions: [], context: [] },
+		});
+		assert.equal(body, "Because the old path could not express it.");
+	} finally {
+		await server.close();
+	}
+});
+
+test("generateCommitBody honours an abort signal", async () => {
+	const server = await startProviderDouble({ delayMs: 5_000, content: "late" });
+	try {
+		const abort = new AbortController();
+		const pending = generateCommitBody({
+			profile: { provider: "compatible", baseUrl: server.baseUrl, model: "m", apiKey: "k" },
+			subject: "feat: x",
+			files: [
+				{ path: "a.ts", status: "M", added: 1, deleted: 0, bytes: 10, head: "", truncated: false, binary: false },
+			],
+			context: { root: "/r", instructions: [], context: [] },
+			signal: abort.signal,
+		});
+		abort.abort();
+		await assert.rejects(pending);
+	} finally {
+		await server.close();
+	}
 });

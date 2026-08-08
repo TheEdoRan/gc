@@ -11,6 +11,7 @@ import {
 	reduce,
 	render,
 	reviewCommits,
+	type ReviewConfig,
 	type ReviewKey,
 	type ReviewState,
 } from "../src/review.ts";
@@ -335,11 +336,12 @@ test("the editor helpers keep the pure message rules out of the shell", () => {
 });
 
 /**
- * The bytes a terminal sends for the keys the review binds. Escape alone is left out on purpose:
- * readline only decodes it after its escape timeout, which would put half a second into any test
- * that pressed it.
+ * The bytes a terminal sends for the keys the review binds. Escape costs real time: readline decodes
+ * a lone escape only after its half-second timeout, so a `wait` has to follow it, which is why only
+ * the generation test presses it.
  */
 const BYTES: Record<string, string> = {
+	escape: "\u001b",
 	up: "\u001b[A",
 	down: "\u001b[B",
 	left: "\u001b[D",
@@ -357,14 +359,23 @@ const CURSOR = /\u001b\[(?:(\d+)A)?\u001b\[(\d+)G$/;
  * Drive the prompt through the same `input` and `output` context options a terminal would fill, and
  * report each frame as the rows it drew plus the row and column it left the cursor on.
  */
-function drive(source: CommitPlan) {
+function drive(source: CommitPlan, onGenerate?: ReviewConfig["onGenerate"]) {
 	const input = new PassThrough();
 	const output = new PassThrough();
 	let drawn = "";
 	output.on("data", (data: Buffer) => {
 		drawn += data.toString();
 	});
-	const result = reviewCommits({ plan: source }, { input, output });
+	const result = reviewCommits({ plan: source, ...(onGenerate ? { onGenerate } : {}) }, { input, output });
+
+	/** Everything drawn since the last read, as rows plus where the cursor was left. */
+	function frame() {
+		const raw = drawn;
+		drawn = "";
+		const match = CURSOR.exec(raw);
+		const lines = stripVTControlCharacters(raw.replace(CURSOR, "")).replace(/^\n+/, "").split("\n");
+		return { lines, row: lines.length - 1 - Number(match?.[1] ?? 0), column: Number(match?.[2] ?? 1) - 1 };
+	}
 
 	// One tick before the keys as well: the first frame is deferred so readline can drain whatever
 	// the stream had buffered before any handler was listening.
@@ -374,14 +385,17 @@ function drive(source: CommitPlan) {
 			input.write(BYTES[name] ?? name);
 			await new Promise((resolve) => setImmediate(resolve));
 		}
-		const raw = drawn;
-		drawn = "";
-		const match = CURSOR.exec(raw);
-		const lines = stripVTControlCharacters(raw.replace(CURSOR, "")).replace(/^\n+/, "").split("\n");
-		return { lines, row: lines.length - 1 - Number(match?.[1] ?? 0), column: Number(match?.[2] ?? 1) - 1 };
+		return frame();
 	}
 
-	return { result, send };
+	/** Let real time pass, for the escape timeout and for callbacks that settle off a keypress. */
+	async function wait(ms: number) {
+		await new Promise((resolve) => setTimeout(resolve, ms));
+		await new Promise((resolve) => setImmediate(resolve));
+		return frame();
+	}
+
+	return { result, send, wait };
 }
 
 test("the prompt draws, navigates and edits a body against a synthetic terminal", { timeout: 5000 }, async () => {
@@ -456,3 +470,77 @@ test("an empty subject keeps the editor open", { timeout: 5000 }, async () => {
 	assert.equal(outcome, "commit");
 	assert.equal(commits[0]?.subject, "feat: renamed");
 });
+
+/**
+ * The one path that cannot be reached through `reduce` alone: the shell's generation continuation.
+ * It resolves after further keypresses, and `useState`'s setter takes a value rather than an
+ * updater, so a callback that closed over the state it was created with would write back a snapshot
+ * from before those keypresses. Every assertion about where the selection ends up is therefore a
+ * test of the `latest` ref rather than of navigation.
+ */
+test(
+	"g generates a body, esc aborts it, and neither write clobbers what changed meanwhile",
+	{ timeout: 20_000 },
+	async () => {
+		const asked: string[] = [];
+		let release: ((body: string) => void) | null = null;
+		const terminal = drive(plan, (index, subject, signal) => {
+			asked.push(`${index}:${subject}`);
+			return new Promise<string>((resolve, reject) => {
+				release = resolve;
+				signal.addEventListener("abort", () => reject(signal.reason as Error));
+			});
+		});
+		await terminal.send();
+
+		// A subject edited in the list, to prove the generator is handed that one and not the plan's.
+		await terminal.send("e", "ctrlu", "feat(cli): edited here", "enter");
+
+		const started = await terminal.send("space", "g");
+		assert.match(started.lines.join("\n"), /writing body…/, "the row says what it is doing");
+		assert.match(started.lines.join("\n"), /esc cancel generation/, "and the hint says how to stop it");
+		assert.deepEqual(asked, ["0:feat(cli): edited here"], "the live subject is what was sent");
+
+		// Navigation stays live while the request is out, and collapses row 0 on the way.
+		const moved = await terminal.send("down");
+		assert.match(moved.lines.join("\n"), /^❯ fix\(git\): keep renames together {2}¶ 1 line$/m, "↓ still moves");
+		assert.match(moved.lines.join("\n"), /writing body…/, "row 0 keeps its marker after the selection left it");
+
+		const expanded = await terminal.send("space");
+		assert.match(expanded.lines.join("\n"), /^ {2}│ Because the pairing is lost\.$/m, "space still expands");
+
+		for (const name of ["e", "i", "x", "r", "enter"]) {
+			assert.deepEqual((await terminal.send(name)).lines, expanded.lines, `${name} changes nothing mid-generation`);
+		}
+
+		await terminal.send("escape");
+		const aborted = await terminal.wait(700);
+		const abortedText = aborted.lines.join("\n");
+		assert.doesNotMatch(abortedText, /writing body…/, "the marker is gone");
+		assert.doesNotMatch(abortedText, /Could not write a body/, "an abort the user asked for reports nothing");
+		assert.doesNotMatch(abortedText, /¶/, "and row 0 was left without a body");
+		assert.match(abortedText, /^❯ fix\(git\): keep renames together$/m, "the selection stayed where it moved to");
+		assert.match(abortedText, /^ {2}│ Because the pairing is lost\.$/m, "so did the expansion");
+		assert.match(abortedText, /x drop body/, "and the hint is the expanded-row one again");
+
+		// Second attempt, on the row the selection moved to, released while the selection is elsewhere.
+		await terminal.send("g");
+		assert.deepEqual(asked[1], "1:fix(git): keep renames together");
+		await terminal.send("up");
+		release!("A body the model wrote.");
+		const written = await terminal.wait(20);
+		const writtenText = written.lines.join("\n");
+		assert.match(writtenText, /^❯ feat\(cli\): edited here$/m, "the move made during the request survived the write");
+		assert.match(writtenText, /^ {2}fix\(git\): keep renames together {2}¶ 1 line$/m, "the body landed on its own row");
+		assert.doesNotMatch(writtenText, /writing body…/);
+
+		// q leaves from anywhere, including with a request still out.
+		await terminal.send("down", "space", "g");
+		assert.equal(asked.length, 3);
+		await terminal.send("q");
+		const { outcome, commits } = await terminal.result;
+		assert.equal(outcome, "cancel", "q cancels the review mid-generation");
+		assert.equal(commits[1]?.body, "A body the model wrote.");
+		assert.equal(plan.commits[1]?.body, "Because the pairing is lost.", "the caller's plan is untouched");
+	}
+);
