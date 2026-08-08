@@ -1,6 +1,6 @@
 {
 	"name": "@theedoran/gc",
-	"version": "0.2.0",
+	"version": "0.2.1",
 	"description": "Generate and create focused Git commits with AI",
 	"keywords": [
 		"ai",
