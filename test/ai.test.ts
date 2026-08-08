@@ -24,8 +24,15 @@ import type { StagedFile } from "../src/git.ts";
  * plain `close()` would wait on it for ever.
  */
 async function startProviderDouble(options: { content: string; delayMs?: number }) {
+	/** The raw request bodies the double was sent, for the tests that assert on what was asked. */
+	const asked: string[] = [];
 	const server = createServer((request, response) => {
+		let received = "";
+		request.on("data", (chunk: Buffer) => {
+			received += chunk.toString();
+		});
 		const send = () => {
+			asked.push(received);
 			response.writeHead(200, { "content-type": "application/json" });
 			response.end(
 				JSON.stringify({
@@ -41,10 +48,12 @@ async function startProviderDouble(options: { content: string; delayMs?: number 
 		if (options.delayMs) setTimeout(send, options.delayMs).unref();
 		else request.on("end", send);
 	});
+
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	const address = server.address();
 	assert(address && typeof address === "object");
 	return {
+		asked,
 		baseUrl: `http://127.0.0.1:${address.port}/v1`,
 		close: () =>
 			new Promise<void>((resolve) => {
@@ -560,26 +569,82 @@ void test("streams subjects from the provider and keeps failure classification i
 	);
 });
 
-test("generateCommitBody returns the model's prose and drops a repeated subject", async () => {
-	const server = await startProviderDouble({
-		content: "feat: x\n\nBecause the old path could not express it.",
-	});
+/** Ask the double for a body, so the cases below differ only in what the model replied. */
+async function bodyFrom(content: string, subject = "feat: x") {
+	const server = await startProviderDouble({ content });
 	try {
-		const body = await generateCommitBody({
+		return await generateCommitBody({
 			profile: { provider: "compatible", baseUrl: server.baseUrl, model: "m", apiKey: "k" },
-			subject: "feat: x",
+			subject,
 			files: [
 				{ path: "a.ts", status: "M", added: 1, deleted: 0, bytes: 10, head: "", truncated: false, binary: false },
 			],
 			context: { root: "/r", instructions: [], context: [] },
 		});
-		assert.equal(body, "Because the old path could not express it.");
 	} finally {
 		await server.close();
 	}
+}
+
+test("generateCommitBody returns the model's prose and drops a repeated subject", { timeout: 10_000 }, async () => {
+	assert.equal(
+		await bodyFrom("feat: x\n\nBecause the old path could not express it."),
+		"Because the old path could not express it."
+	);
 });
 
-test("generateCommitBody honours an abort signal", async () => {
+/**
+ * Only a whole repeated subject line is dropped. Cutting `subject.length` off anything else leaves
+ * the punctuation that followed it, which reads as garbage at the head of the commit body.
+ */
+test("generateCommitBody strips a repeated subject only when the whole line repeats", { timeout: 10_000 }, async () => {
+	const subject = "feat(api): version the client";
+	const restated = "feat(api): version the client, routes and errors\n\nBecause v1 leaked.";
+	assert.equal(await bodyFrom(restated, subject), restated, "a longer opening is prose, not a repeat");
+
+	const punctuated = "feat(api): version the client.\n\nBecause v1 leaked.";
+	assert.equal(await bodyFrom(punctuated, subject), punctuated, "neither is the subject plus a full stop");
+
+	// A reply that is the subject and nothing else leaves no body at all, which must not be written.
+	await assert.rejects(bodyFrom(subject, subject), /empty body/);
+	await assert.rejects(bodyFrom(`  ${subject}  \n\n `, subject), /empty body/);
+});
+
+/**
+ * The shell writes whatever comes back straight onto the row, so an empty answer would wipe a body
+ * the user already had. A reasoning model that spends the whole output ceiling before writing a
+ * character produces exactly that, which is why this is a rejection rather than an empty string.
+ */
+test("generateCommitBody refuses an empty answer instead of returning one", { timeout: 10_000 }, async () => {
+	await assert.rejects(bodyFrom(""), /empty body/);
+	await assert.rejects(bodyFrom("   \n\n  "), /empty body/);
+});
+
+test(
+	"generateCommitBody keeps oversized repository instructions from crowding out the diff",
+	{ timeout: 10_000 },
+	async () => {
+		const server = await startProviderDouble({ content: "Because the guide said so." });
+		try {
+			await generateCommitBody({
+				profile: { provider: "compatible", baseUrl: server.baseUrl, model: "m", apiKey: "k", maxInputTokens: 4_000 },
+				subject: "feat: x",
+				files: [staged("a.ts")],
+				context: { root: "/r", instructions: [{ path: "AGENTS.md", content: "g".repeat(200_000) }], context: [] },
+			});
+			const prompt = server.asked[0] ?? "";
+			// 4,000 tokens at two bytes each, halved for the body request, so a quarter of that is the
+			// document share. The unclamped document alone was fifty times the whole prompt budget.
+			assert.ok(Buffer.byteLength(prompt) < 8_192, `prompt was ${Buffer.byteLength(prompt)} bytes`);
+			assert.match(prompt, /AGENTS\.md/, "the instruction is still named");
+			assert.match(prompt, /a\.ts/, "and the diff still survives beside it");
+		} finally {
+			await server.close();
+		}
+	}
+);
+
+test("generateCommitBody honours an abort signal", { timeout: 10_000 }, async () => {
 	const server = await startProviderDouble({ delayMs: 5_000, content: "late" });
 	try {
 		const abort = new AbortController();

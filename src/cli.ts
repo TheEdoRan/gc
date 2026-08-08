@@ -150,7 +150,9 @@ export async function run(args = process.argv.slice(2)): Promise<void> {
 			// The subject comes from the list, not from `plan`, so a subject edited in place is the
 			// one the model is asked to write a body for. The files still come from the plan, which
 			// is correct: the list never changes which files belong to which commit.
-			onGenerate: (index, subject, signal) => {
+			// Async, so the guard below rejects the promise the shell is waiting on. A synchronous
+			// throw would escape the keypress handler and take the whole prompt down with it.
+			onGenerate: async (index, subject, signal) => {
 				const commit = plan.commits[index];
 				if (!commit) throw new Error("No such commit.");
 				return generateCommitBody({

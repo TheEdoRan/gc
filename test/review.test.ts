@@ -484,10 +484,12 @@ test(
 	async () => {
 		const asked: string[] = [];
 		let release: ((body: string) => void) | null = null;
+		let refuse: ((error: Error) => void) | null = null;
 		const terminal = drive(plan, (index, subject, signal) => {
 			asked.push(`${index}:${subject}`);
 			return new Promise<string>((resolve, reject) => {
 				release = resolve;
+				refuse = reject;
 				signal.addEventListener("abort", () => reject(signal.reason as Error));
 			});
 		});
@@ -534,9 +536,19 @@ test(
 		assert.match(writtenText, /^ {2}fix\(git\): keep renames together {2}¶ 1 line$/m, "the body landed on its own row");
 		assert.doesNotMatch(writtenText, /writing body…/);
 
-		// q leaves from anywhere, including with a request still out.
+		// A generator that refuses says so on the row and leaves the body that was already there.
+		// generateCommitBody rejects rather than answering with an empty string for exactly this reason.
 		await terminal.send("down", "space", "g");
-		assert.equal(asked.length, 3);
+		refuse!(new Error("The model returned an empty body."));
+		const refused = await terminal.wait(20);
+		const refusedText = refused.lines.join("\n");
+		assert.match(refusedText, /Could not write a body: Error: The model returned an empty body\./);
+		assert.match(refusedText, /^ {2}│ A body the model wrote\.$/m, "the body that was there survived");
+		assert.doesNotMatch(refusedText, /writing body…/);
+
+		// q leaves from anywhere, including with a request still out.
+		await terminal.send("g");
+		assert.equal(asked.length, 4);
 		await terminal.send("q");
 		const { outcome, commits } = await terminal.result;
 		assert.equal(outcome, "cancel", "q cancels the review mid-generation");

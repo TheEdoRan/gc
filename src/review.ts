@@ -379,8 +379,9 @@ function sync(rl: RawReadline, live: Live): Live {
 export interface ReviewConfig {
 	plan: CommitPlan;
 	/**
-	 * Ask the model for a body. Absent until the generator exists. The subject is passed in rather
-	 * than read from the caller's plan, so a subject edited in the list is the one that is sent.
+	 * Ask the model for a body. Both shipping callers pass one; it stays optional so the prompt can
+	 * be driven without a provider, which is how most of its own tests run. The subject is passed in
+	 * rather than read from the caller's plan, so a subject edited in the list is the one that is sent.
 	 */
 	onGenerate?: (index: number, subject: string, signal: AbortSignal) => Promise<string>;
 }
@@ -460,7 +461,7 @@ export const reviewCommits = createPrompt<ReviewResult, ReviewConfig>((config, d
 
 		if (effect.type === "generate") {
 			if (!config.onGenerate) {
-				final = { ...next, error: "Body generation is not available yet." };
+				final = { ...next, error: "Body generation is not configured." };
 			} else {
 				const abort = new AbortController();
 				setController(abort);
