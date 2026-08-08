@@ -1,0 +1,6 @@
+[
+	"feat(cli): add the review prompt",
+	"fix(git): keep renames together",
+	"docs: describe the review flow",
+	"chore(deps): bump oxlint"
+]

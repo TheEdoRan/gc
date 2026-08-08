@@ -1,0 +1,13 @@
+diff --git a/src/greet.ts b/src/hello.ts
+similarity index 75%
+rename from src/greet.ts
+rename to src/hello.ts
+index 20646e7..c83c989 100644
+--- a/src/greet.ts
++++ b/src/hello.ts
+@@ -1,4 +1,4 @@
+ export function greet(name: string, loud = false) {
+-	const text = `hi ${name}`;
++	const text = `hello ${name}`;
+ 	return loud ? text.toUpperCase() : text;
+ }

@@ -255,6 +255,18 @@ function matchPath(header: string, paths: Set<string>): string | undefined {
 	return fallback;
 }
 
+/** Hand every complete line in `buffer` to `onLine`, returning the trailing partial line. */
+function consumeLines(buffer: Buffer, onLine: (line: Buffer) => void): Buffer {
+	let start = 0;
+	for (;;) {
+		const end = buffer.indexOf(NEWLINE, start);
+		if (end === -1) break;
+		onLine(buffer.subarray(start, end + 1));
+		start = end + 1;
+	}
+	return buffer.subarray(start);
+}
+
 /** Spawn a git command and hand its stdout to `onLine` one complete line at a time. */
 async function streamLines(args: string[], cwd: string, onLine: (line: Buffer) => void): Promise<void> {
 	const child = spawn("git", args, { cwd, stdio: ["ignore", "pipe", "pipe"] });
@@ -270,20 +282,64 @@ async function streamLines(args: string[], cwd: string, onLine: (line: Buffer) =
 	// intact, and since `\n` cannot appear inside a multi-byte sequence, no character is ever split.
 	let pending: Buffer = Buffer.alloc(0);
 	for await (const chunk of child.stdout as AsyncIterable<Buffer>) {
-		const buffer = pending.length > 0 ? Buffer.concat([pending, chunk]) : chunk;
-		let start = 0;
-		for (;;) {
-			const end = buffer.indexOf(NEWLINE, start);
-			if (end === -1) break;
-			onLine(buffer.subarray(start, end + 1));
-			start = end + 1;
-		}
-		pending = buffer.subarray(start);
+		pending = consumeLines(pending.length > 0 ? Buffer.concat([pending, chunk]) : chunk, onLine);
 	}
 	if (pending.length > 0) onLine(pending);
 
 	const code = await exit;
 	if (code !== 0) throw new GitError(`git ${args[0]} failed`, code, Buffer.concat(stderr).toString("utf8"));
+}
+
+/**
+ * Map parsed diff sections and name-status records to `StagedFile` records. Shared by
+ * `parseRepository` and `readRepository` so the two paths cannot drift.
+ */
+function finishRepository(
+	parser: ReturnType<typeof createDiffParser>,
+	names: Buffer,
+	history: string[]
+): Omit<RepositoryChanges, "root"> {
+	const { paths, renames, records } = parseNames(names);
+	const known = new Set(records.map((record) => record.path));
+	const byPath = new Map<string, Section>();
+	for (const section of parser.sections) {
+		const path = matchPath(section.header, known);
+		if (path !== undefined && !byPath.has(path)) byPath.set(path, section);
+	}
+
+	const decoder = new TextDecoder("utf8");
+	const files = records.map(({ path, status }): StagedFile => {
+		const section = byPath.get(path);
+		return {
+			path,
+			status,
+			added: section?.added ?? 0,
+			deleted: section?.deleted ?? 0,
+			bytes: section?.bytes ?? 0,
+			head: section ? decoder.decode(Buffer.concat(section.chunks)) : "",
+			truncated: section?.truncated ?? false,
+			binary: section?.binary ?? false,
+		};
+	});
+
+	return { files, paths, renames, history };
+}
+
+/**
+ * Turn raw `git diff --cached` and `--name-status -z` output into staged changes. Split out of
+ * `readRepository` so fixtures and tests can drive it without a repository. Real repositories keep
+ * going through `readRepository`, which streams the diff instead of buffering it.
+ */
+export function parseRepository(
+	diff: Buffer,
+	names: Buffer,
+	history: string[],
+	retainBudgetBytes = DEFAULT_RETAIN_BUDGET
+): Omit<RepositoryChanges, "root"> {
+	const parser = createDiffParser(retainBudgetBytes);
+	const rest = consumeLines(diff, parser.onLine);
+	if (rest.length > 0) parser.onLine(rest);
+	return finishRepository(parser, names, history);
 }
 
 export async function readRepository(
@@ -307,35 +363,13 @@ export async function readRepository(
 		git(["log", "-20", "--format=%s"], root, undefined, true),
 	]);
 
-	const { paths, renames, records } = parseNames(names.stdout);
-	const known = new Set(records.map((record) => record.path));
-	const byPath = new Map<string, Section>();
-	for (const section of parser.sections) {
-		const path = matchPath(section.header, known);
-		if (path !== undefined && !byPath.has(path)) byPath.set(path, section);
-	}
-
-	const decoder = new TextDecoder("utf8");
-	const files = records.map(({ path, status }): StagedFile => {
-		const section = byPath.get(path);
-		return {
-			path,
-			status,
-			added: section?.added ?? 0,
-			deleted: section?.deleted ?? 0,
-			bytes: section?.bytes ?? 0,
-			head: section ? decoder.decode(Buffer.concat(section.chunks)) : "",
-			truncated: section?.truncated ?? false,
-			binary: section?.binary ?? false,
-		};
-	});
-
 	return {
 		root,
-		files,
-		paths,
-		renames,
-		history: log.code === 0 ? log.stdout.toString("utf8").trimEnd().split("\n").filter(Boolean) : [],
+		...finishRepository(
+			parser,
+			names.stdout,
+			log.code === 0 ? log.stdout.toString("utf8").trimEnd().split("\n").filter(Boolean) : []
+		),
 	};
 }
 

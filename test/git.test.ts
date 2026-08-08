@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { batchPathspecs, createCommits, readRepository } from "../src/git.ts";
+import { batchPathspecs, createCommits, parseRepository, readRepository } from "../src/git.ts";
 
 function run(cwd: string, ...args: string[]): string {
 	return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
@@ -210,4 +210,36 @@ void test("rejects an incomplete split without changing the index", async () => 
 		/contain every staged path exactly once/
 	);
 	assert.deepEqual(run(root, "diff", "--cached", "--name-only").split("\n"), ["one.txt", "two.txt"]);
+});
+
+async function fixture(name: string) {
+	const directory = new URL("./fixtures/staged/", import.meta.url);
+	const [diff, names] = await Promise.all([
+		readFile(new URL(`${name}.diff`, directory)),
+		readFile(new URL(`${name}.names`, directory)),
+	]);
+	return parseRepository(diff, names, ["chore: seed"]);
+}
+
+void test("parseRepository reads a single staged file", async () => {
+	const changes = await fixture("single");
+	assert.deepEqual(changes.paths, ["src/greet.ts"]);
+	assert.equal(changes.files[0]?.status, "M");
+	assert.ok(changes.files[0].added > 0);
+	assert.match(changes.files[0].head, /diff --git/);
+	assert.deepEqual(changes.history, ["chore: seed"]);
+});
+
+void test("parseRepository keeps both sides of a rename", async () => {
+	const changes = await fixture("rename");
+	assert.equal(changes.renames.length, 1);
+	const { from, to } = changes.renames[0]!;
+	assert.ok(changes.paths.includes(from));
+	assert.ok(changes.paths.includes(to));
+});
+
+void test("parseRepository reports every staged path", async () => {
+	const changes = await fixture("mixed");
+	assert.ok(changes.paths.length >= 8);
+	assert.equal(changes.files.length, changes.paths.length - changes.renames.length);
 });
