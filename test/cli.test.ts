@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { formatPlan, help, parseCliArgs, reviewPlan } from "../src/cli.ts";
+import { help, parseCliArgs } from "../src/cli.ts";
+import { reviewCommits } from "../src/review.ts";
 
 test("parses public CLI arguments", () => {
 	assert.deepEqual(parseCliArgs([]), { command: "commit", all: false });
@@ -23,15 +24,9 @@ test("parses the body flag", () => {
 	assert.throws(() => parseCliArgs(["--body", "sometimes"]), /manual, auto, always/);
 });
 
-test("edits one message then returns to the full review", async () => {
-	const plan = { commits: [{ subject: "old", body: "", files: ["a.ts"] }] };
-	const answers: unknown[] = ["edit", 0, "commit"];
-	const action = await reviewPlan(plan, {
-		select: async () => answers.shift() as never,
-		editor: async () => "feat: new\n\nDetails",
-	});
-	assert.equal(action, "commit");
-	assert.equal(plan.commits[0]?.subject, "feat: new");
-	assert.equal(plan.commits[0]?.body, "Details");
-	assert.match(formatPlan(plan), /a\.ts/);
+test("the review prompt replaces the old preview helpers", async () => {
+	const cli: Record<string, unknown> = await import("../src/cli.ts");
+	assert.equal(cli.formatPlan, undefined);
+	assert.equal(cli.reviewPlan, undefined);
+	assert.equal(typeof reviewCommits, "function");
 });

@@ -1,5 +1,8 @@
+import { createPrompt, useEffect, useKeypress, useRef, useState } from "@inquirer/core";
+import { editAsync } from "@inquirer/external-editor";
+
 import type { CommitPlan, ProposedCommit } from "./ai.ts";
-import { paint, type Terminal } from "./terminal.ts";
+import { createTerminal, paint, type Terminal } from "./terminal.ts";
 import {
 	activeLine,
 	fromText,
@@ -314,3 +317,165 @@ export function render(state: ReviewState, live: Live, terminal: Terminal, width
 	if (cursorLine < 0) return [lines.join("\n"), footer];
 	return [lines.slice(0, cursorLine + 1).join("\n"), [...lines.slice(cursorLine + 1), footer].join("\n")];
 }
+
+/**
+ * readline owns the live line, but `InquirerReadline` declares neither the cursor column nor that
+ * both are writable, and `readline.Interface` marks them readonly.
+ */
+interface RawReadline {
+	line: string;
+	cursor: number;
+	history: string[];
+	pause: () => void;
+	resume: () => void;
+}
+
+const EMPTY_LIVE: Live = { text: "", column: 0 };
+
+/**
+ * True when the review binds the key itself, so readline's reaction to it has to be undone.
+ *
+ * readline runs first and it does not know it is being driven: `return` empties the line, `ctrl+d`
+ * deletes the character to the right, `ctrl+e` jumps to the end, and `up`/`down` walk its history.
+ * For these the live line comes from state and readline is put back where the last frame left it.
+ * Everything else, including plain typing and `backspace` past column 0, is readline's to own.
+ */
+function isClaimed(mode: ReviewMode, key: ReviewKey): boolean {
+	if (mode === "list") return true;
+	if (key.ctrl) return key.name === "d" || key.name === "e";
+	if (key.name === "return" || key.name === "escape") return true;
+	return mode === "body" && (key.name === "up" || key.name === "down");
+}
+
+/**
+ * The only place readline's line is written.
+ *
+ * The screen manager recovers the prompt prefix with `lastLine(content).slice(0, -rl.line.length)`
+ * and then measures `prefix + line.slice(0, cursor)` to place the terminal cursor. That lands on
+ * the right column only while readline holds exactly the live line `render` draws, so every path
+ * through the keypress handler passes through here.
+ */
+function sync(rl: RawReadline, live: Live): Live {
+	rl.line = live.text;
+	rl.cursor = live.column;
+	return live;
+}
+
+export interface ReviewConfig {
+	plan: CommitPlan;
+	/**
+	 * Ask the model for a body. Absent until the generator exists. The subject is passed in rather
+	 * than read from the caller's plan, so a subject edited in the list is the one that is sent.
+	 */
+	onGenerate?: (index: number, subject: string, signal: AbortSignal) => Promise<string>;
+}
+
+export interface ReviewResult {
+	outcome: ReviewOutcome;
+	commits: ProposedCommit[];
+}
+
+export const reviewCommits = createPrompt<ReviewResult, ReviewConfig>((config, done) => {
+	const terminal = createTerminal(process.stdout);
+	const [state, setState] = useState(() => initialState(config.plan));
+	const [live, setLive] = useState<Live>(EMPTY_LIVE);
+	const [controller, setController] = useState<AbortController | null>(null);
+	// `useState`'s setter takes a value, not an updater, so callbacks that resolve after further
+	// keypresses read the newest state from here instead of closing over a stale one.
+	const latest = useRef(state);
+	latest.current = state;
+
+	useEffect(() => {
+		if (state.done) done({ outcome: state.done, commits: state.commits });
+	}, [state.done]);
+
+	// readline reads ctrl+d on an empty line as end of input and closes itself, which would freeze
+	// the prompt. The body box binds ctrl+d to save, so close is disarmed while that box is open.
+	// The teardown path is untouched: the hooks are cleaned up before the screen manager closes.
+	useEffect(
+		(rl) => {
+			const close = rl.close.bind(rl);
+			if (state.mode === "body") rl.close = () => {};
+			return () => {
+				rl.close = close;
+			};
+		},
+		[state.mode]
+	);
+
+	useKeypress((key, readline) => {
+		const rl = readline as unknown as RawReadline;
+
+		// Return in the body box is a newline, not a submission, but readline still files every one
+		// of them in its history, where up and down could recall one into an unrelated line.
+		rl.history.length = 0;
+
+		const echoed = state.mode === "list" && rl.line.length > 0;
+		const current = sync(rl, isClaimed(state.mode, key) ? live : { text: rl.line, column: rl.cursor });
+
+		const [next, effect] = reduce(state, key, current);
+		let final = next;
+		const target: Live = effect.type === "load" ? { text: effect.text, column: effect.column } : current;
+
+		if (effect.type === "abort") controller?.abort();
+
+		if (effect.type === "editor") {
+			const commit = next.commits[effect.index];
+			// The buffer, not the commit, holds the body while the box is open: reduce banked the
+			// live line into it before asking for the editor.
+			const body = next.mode === "body" && next.buffer ? toText(next.buffer) : (commit?.body ?? "");
+			const message = commit ? (body.trim() ? `${commit.subject}\n\n${body}` : commit.subject) : "";
+			// readline has to let go of the terminal while the child owns it. External-editor
+			// restores raw mode on exit, and the list stays on screen behind it.
+			rl.pause();
+			void editAsync(message, { postfix: ".txt" })
+				.then(
+					(edited) => {
+						const [subject = "", ...rest] = edited.replace(/\r\n/g, "\n").split("\n");
+						if (!subject.trim()) {
+							setState({ ...latest.current, error: "A commit subject cannot be empty." });
+							return;
+						}
+						setState(
+							withCommit(latest.current, effect.index, {
+								subject: subject.trim(),
+								body: rest.join("\n").trim(),
+							})
+						);
+					},
+					(error: unknown) => setState({ ...latest.current, error: `Editor failed: ${String(error)}` })
+				)
+				.finally(() => rl.resume());
+			final = { ...next, mode: "list", buffer: null };
+		}
+
+		if (effect.type === "generate") {
+			if (!config.onGenerate) {
+				final = { ...next, error: "Body generation is not available yet." };
+			} else {
+				const abort = new AbortController();
+				setController(abort);
+				final = { ...next, generating: effect.index, error: null };
+				void config
+					.onGenerate(effect.index, next.commits[effect.index]?.subject ?? "", abort.signal)
+					.then(
+						(body) => setState({ ...withCommit(latest.current, effect.index, { body }), generating: null }),
+						(error: unknown) =>
+							setState({
+								...latest.current,
+								generating: null,
+								error: abort.signal.aborted ? null : `Could not write a body: ${String(error)}`,
+							})
+					)
+					.finally(() => setController(null));
+			}
+		}
+
+		setState(final);
+		// An echoed key already made the screen manager move the terminal cursor, so clearing the
+		// line is not enough: a fresh object forces the redraw that puts it back.
+		setLive(sync(rl, final.mode === "list" ? (echoed ? { text: "", column: 0 } : EMPTY_LIVE) : target));
+	});
+
+	return render(state, live, terminal, process.stdout.columns || 80);
+});

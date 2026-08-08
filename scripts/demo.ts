@@ -7,10 +7,10 @@ import { readFile } from "node:fs/promises";
 import { parseArgs } from "node:util";
 
 import { generateCommitPlan, type CommitPlan, type PlanEvent } from "../src/ai.ts";
-import { reviewPlan } from "../src/cli.ts";
 import { BODY_MODES, mergeConfig, readConfig, readProjectConfig, type BodyMode, type Profile } from "../src/config.ts";
 import { discoverContext } from "../src/context.ts";
 import { parseRepository } from "../src/git.ts";
+import { reviewCommits } from "../src/review.ts";
 import { createSpinner, createTerminal } from "../src/terminal.ts";
 
 const FIXTURES = new URL("../test/fixtures/staged/", import.meta.url);
@@ -104,11 +104,11 @@ try {
 	spinner.stop();
 }
 
-const action = await reviewPlan(plan);
-if (action !== "commit") {
-	process.stdout.write(`${action}\n`);
+const { outcome, commits } = await reviewCommits({ plan });
+if (outcome !== "commit") {
+	process.stdout.write(`${outcome}\n`);
 } else {
-	for (const commit of plan.commits) {
+	for (const commit of commits) {
 		const commitBody = commit.body.trim() ? ` -m ${JSON.stringify(commit.body)}` : "";
 		process.stdout.write(`would run: git commit -m ${JSON.stringify(commit.subject)}${commitBody}\n`);
 	}

@@ -1,7 +1,5 @@
 import { parseArgs } from "node:util";
 
-import { editor, select } from "@inquirer/prompts";
-
 import packageJson from "../package.json" with { type: "json" };
 import { DEFAULT_MAX_INPUT_TOKENS, generateCommitPlan, type CommitPlan } from "./ai.ts";
 import {
@@ -15,6 +13,7 @@ import {
 } from "./config.ts";
 import { discoverContext } from "./context.ts";
 import { createCommits, readRepository } from "./git.ts";
+import { reviewCommits } from "./review.ts";
 import { createSpinner, createTerminal } from "./terminal.ts";
 
 export const help = `Usage:
@@ -82,65 +81,6 @@ export function parseCliArgs(args: string[]): CliArguments {
 	};
 }
 
-export function formatPlan(plan: CommitPlan): string {
-	const commits = plan.commits
-		.map(
-			(commit, index) =>
-				`\n${index + 1}. ${commit.subject}${commit.body ? `\n\n${commit.body}` : ""}\n\n${commit.files.map((file) => `   ${file}`).join("\n")}`
-		)
-		.join("\n");
-	const banner = plan.fallback
-		? `\n! the provider did not return a plan, showing a local fallback you can edit${plan.failureReason ? `\n! ${plan.failureReason}` : ""}\n`
-		: "";
-	const notice = plan.notice ? `\n\ncontext: ${plan.notice}` : "";
-	return `${banner}${commits}${notice}`;
-}
-
-export interface ReviewPrompts {
-	select<T>(options: { message: string; choices: Array<{ name: string; value: T }> }): Promise<T>;
-	editor(options: { message: string; default?: string }): Promise<string>;
-}
-
-const reviewPrompts: ReviewPrompts = {
-	select: (options) => select(options),
-	editor: (options) => editor(options),
-};
-
-export async function reviewPlan(
-	plan: CommitPlan,
-	prompts = reviewPrompts
-): Promise<"commit" | "regenerate" | "cancel"> {
-	for (;;) {
-		process.stdout.write(`${formatPlan(plan)}\n\n`);
-		const action = await prompts.select({
-			message: "Review commit plan",
-			choices: [
-				{ name: "Commit plan", value: "commit" as const },
-				{ name: "Edit one message", value: "edit" as const },
-				{ name: "Regenerate", value: "regenerate" as const },
-				{ name: "Cancel", value: "cancel" as const },
-			],
-		});
-		if (action !== "edit") return action;
-		const index = await prompts.select({
-			message: "Message to edit",
-			choices: plan.commits.map((commit, commitIndex) => ({ name: commit.subject, value: commitIndex })),
-		});
-		const commit = plan.commits[index];
-		if (!commit) continue;
-		const message = (
-			await prompts.editor({
-				message: "Edit commit message",
-				default: `${commit.subject}${commit.body ? `\n\n${commit.body}` : ""}`,
-			})
-		).replace(/\r\n/g, "\n");
-		const [subject = "", ...body] = message.split("\n");
-		if (!subject.trim()) throw new Error("A commit subject cannot be empty.");
-		commit.subject = subject.trim();
-		commit.body = body.join("\n").trim();
-	}
-}
-
 export async function run(args = process.argv.slice(2)): Promise<void> {
 	const options = parseCliArgs(args);
 	if (options.command === "help") return void process.stdout.write(`${help}\n`);
@@ -204,10 +144,10 @@ export async function run(args = process.argv.slice(2)): Promise<void> {
 		} finally {
 			spinner.stop();
 		}
-		const action = await reviewPlan(plan);
-		if (action === "regenerate") continue;
-		if (action === "cancel") return void process.stdout.write("Cancelled.\n");
-		await createCommits(repository.root, plan.commits);
+		const { outcome, commits } = await reviewCommits({ plan });
+		if (outcome === "regenerate") continue;
+		if (outcome === "cancel") return void process.stdout.write("Cancelled.\n");
+		await createCommits(repository.root, commits);
 		return;
 	}
 }
