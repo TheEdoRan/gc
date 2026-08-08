@@ -1,7 +1,7 @@
 import { createAnthropic } from "@ai-sdk/anthropic";
 import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
-import { generateText, jsonSchema, NoObjectGeneratedError, Output } from "ai";
+import { jsonSchema, NoObjectGeneratedError, Output, streamText } from "ai";
 
 import type { BodyMode, Profile } from "./config.ts";
 import { buildPrompt, type PromptGroup, type RepositoryContext } from "./context.ts";
@@ -326,6 +326,24 @@ function modelFor(profile: Profile) {
 	})(profile.model);
 }
 
+/**
+ * Pull commit subjects out of a response that is still being written. The final match is allowed to
+ * be unterminated, which is exactly what a subject mid-write looks like. The value is only ever
+ * displayed, so a malformed escape is left alone rather than throwing.
+ */
+export function extractSubjects(text: string): string[] {
+	const subjects: string[] = [];
+	for (const match of text.matchAll(/"subject"\s*:\s*"((?:[^"\\]|\\.)*)/g)) {
+		const raw = match[1] ?? "";
+		try {
+			subjects.push(JSON.parse(`"${raw.replace(/\\$/, "")}"`) as string);
+		} catch {
+			subjects.push(raw);
+		}
+	}
+	return subjects;
+}
+
 async function callModel(input: {
 	profile: Profile;
 	prompt: string;
@@ -333,7 +351,13 @@ async function callModel(input: {
 	schema: typeof commitPlanSchema;
 	maxOutputTokens: number;
 	timeoutMs: number;
+	onProgress?: (event: PlanEvent) => void;
 }): Promise<unknown> {
+	// streamText keeps error parts out of textStream and partialOutputStream, so a transport failure
+	// is captured here and rethrown after consumption. It has to be rethrown before any promise on
+	// the result is awaited: once the stream has ended in an error those reject with a generic
+	// "no output generated", which classifyFailure would read as transient and retry a dead key.
+	let streamError: unknown;
 	const request = {
 		model: modelFor(input.profile),
 		prompt: input.prompt,
@@ -342,22 +366,55 @@ async function callModel(input: {
 		// This function is one attempt of an outer state machine that already knows how to change
 		// the request between tries. The SDK's own blind retries would only multiply the wait.
 		maxRetries: 0,
+		onError: ({ error }: { error: unknown }) => {
+			streamError = error;
+		},
 	};
 
+	const seen: string[] = [];
+	function report(subjects: string[]) {
+		for (const [index, subject] of subjects.entries()) {
+			if (!subject || seen[index] === subject) continue;
+			seen[index] = subject;
+			input.onProgress?.({ type: "subject", index, text: subject });
+		}
+	}
+
+	// Streaming is a display concern, so a subject that cannot be read never fails the request.
+	let first = true;
+	function announce() {
+		if (!first) return;
+		first = false;
+		input.onProgress?.({ type: "phase", label: "writing plan" });
+	}
+
 	if (!input.structured) {
-		const { text, finishReason } = await generateText(request);
-		if (finishReason === "length" && !text.trim()) {
+		const result = streamText(request);
+		let text = "";
+		for await (const delta of result.textStream) {
+			announce();
+			text += delta;
+			report(extractSubjects(text));
+		}
+		if (streamError) throw streamError;
+		if ((await result.finishReason) === "length" && !text.trim()) {
 			throw new ModelFailure("length", "The model used the whole output budget without answering.");
 		}
 		return extractJsonObject(text);
 	}
 
 	try {
-		const result = await generateText({ ...request, output: Output.object({ schema: input.schema }) });
-		if (result.finishReason === "length") {
+		const result = streamText({ ...request, output: Output.object({ schema: input.schema }) });
+		for await (const partial of result.partialOutputStream) {
+			announce();
+			const commits = (partial as { commits?: Array<{ subject?: unknown } | undefined> } | undefined)?.commits ?? [];
+			report(commits.map((commit) => (typeof commit?.subject === "string" ? commit.subject : "")));
+		}
+		if (streamError) throw streamError;
+		if ((await result.finishReason) === "length") {
 			throw new ModelFailure("length", "The model used the whole output budget without answering.");
 		}
-		return result.output;
+		return await result.output;
 	} catch (error) {
 		// The SDK already holds the text it could not coerce. Salvaging it here turns a wasted
 		// round trip into a usable answer, which matters most on the slow reasoning models.
@@ -450,8 +507,10 @@ export async function generateCommitPlan(input: {
 					schema,
 					maxOutputTokens: outputTokens,
 					timeoutMs: Math.min(REQUEST_TIMEOUT_MS, remainingMs),
+					...(input.onProgress ? { onProgress: input.onProgress } : {}),
 				}));
 
+		input.onProgress?.({ type: "phase", label: `waiting for ${input.profile.model}` });
 		calls++;
 		let output: unknown;
 		try {
@@ -468,23 +527,28 @@ export async function generateCommitPlan(input: {
 			// rate limit says nothing, so those must not cost the structured path.
 			if (kind === "response-format" && structured) {
 				structured = false;
+				input.onProgress?.({ type: "retry", attempt: calls, reason: "the endpoint refused a schema" });
 				continue;
 			}
 			if (kind === "input-limit" && budgetTokens > MIN_INPUT_TOKENS) {
 				budgetTokens = Math.max(MIN_INPUT_TOKENS, Math.floor(budgetTokens / 2));
 				validationError = undefined;
+				input.onProgress?.({ type: "retry", attempt: calls, reason: `halved the input budget to ${budgetTokens}` });
 				continue;
 			}
 			if (kind === "output-limit" && outputTokens > MIN_OUTPUT_TOKENS) {
 				outputTokens = Math.max(MIN_OUTPUT_TOKENS, Math.floor(outputTokens / 2));
 				validationError = undefined;
+				input.onProgress?.({ type: "retry", attempt: calls, reason: `halved the output ceiling to ${outputTokens}` });
 				continue;
 			}
 			if (kind === "length" || kind === "invalid-output") {
 				if (++contentFailures > MAX_CONTENT_FAILURES) break;
 				validationError = clampFeedback(error instanceof Error ? error.message : String(error));
+				input.onProgress?.({ type: "retry", attempt: calls, reason: validationError });
 				continue;
 			}
+			input.onProgress?.({ type: "retry", attempt: calls, reason: failureReason });
 			// Transient: the request was fine, so repeat it unchanged while time remains.
 			continue;
 		}
@@ -501,6 +565,7 @@ export async function generateCommitPlan(input: {
 			failureReason = clampFeedback(error instanceof Error ? error.message : String(error));
 			if (++contentFailures > MAX_CONTENT_FAILURES) break;
 			validationError = failureReason;
+			input.onProgress?.({ type: "retry", attempt: calls, reason: failureReason });
 		}
 	}
 

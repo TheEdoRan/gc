@@ -15,6 +15,7 @@ import {
 } from "./config.ts";
 import { discoverContext } from "./context.ts";
 import { createCommits, readRepository } from "./git.ts";
+import { createSpinner, createTerminal } from "./terminal.ts";
 
 export const help = `Usage:
   gc [-a|--all] [-i|--instructions <text>] [--split|--no-split] [--body <mode>]
@@ -161,26 +162,24 @@ export async function run(args = process.argv.slice(2)): Promise<void> {
 	// Retain a few multiples of the prompt budget while streaming so reallocation has slack, but
 	// stay bounded no matter how large the staged diff is.
 	const retainBudget = (profile.maxInputTokens ?? DEFAULT_MAX_INPUT_TOKENS) * 2 * 4;
-	const repository = await readRepository(process.cwd(), options.all, retainBudget);
+
+	const terminal = createTerminal();
+	const boot = createSpinner(terminal, profile.model);
+	boot.phase("reading staged changes");
+	// Stopped on failure too, so a thrown error never leaves the cursor hidden.
+	const repository = await readRepository(process.cwd(), options.all, retainBudget).finally(() => boot.stop());
 	if (!repository.paths.length) throw new Error("No staged changes.");
 
 	const merged = mergeConfig(config, await readProjectConfig(repository.root));
-	const context = await discoverContext(repository.root, repository.paths);
+	boot.phase("reading project context");
+	const context = await discoverContext(repository.root, repository.paths).finally(() => boot.stop());
 	const split = options.split ?? merged.split;
 
 	for (;;) {
-		// A reasoning model can think for a minute before its first token. Without this the CLI
-		// looks hung, and the user kills a request that was about to succeed.
-		const started = Date.now();
-		// Only on a terminal: in a pipe or a log the carriage returns are noise, not progress.
-		const ticker = process.stderr.isTTY
-			? setInterval(() => {
-					process.stderr.write(
-						`\r\u001b[Kwaiting for ${profile.model}... ${Math.round((Date.now() - started) / 1000)}s`
-					);
-				}, 1_000)
-			: undefined;
-		ticker?.unref();
+		// A reasoning model can think for a minute before its first token. Without a spinner the
+		// CLI looks hung, and the user kills a request that was about to succeed.
+		const spinner = createSpinner(terminal, profile.model);
+		spinner.phase("building context");
 
 		let plan: CommitPlan;
 		try {
@@ -195,13 +194,15 @@ export async function run(args = process.argv.slice(2)): Promise<void> {
 				body: options.body ?? merged.body,
 				exclude: merged.excludeContent,
 				include: merged.includeContent,
+				onProgress: (event) => {
+					if (event.type === "phase") spinner.phase(event.label);
+					if (event.type === "subject") spinner.subject(event.index, event.text);
+					if (event.type === "retry") spinner.note(`retry ${event.attempt}: ${event.reason}`);
+				},
 				...(options.instructions ? { instructions: options.instructions } : {}),
 			});
 		} finally {
-			if (ticker) {
-				clearInterval(ticker);
-				process.stderr.write("\r\u001b[K");
-			}
+			spinner.stop();
 		}
 		const action = await reviewPlan(plan);
 		if (action === "regenerate") continue;

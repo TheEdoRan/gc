@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
+import { createServer, type ServerResponse } from "node:http";
 import { test } from "node:test";
 
-import { classifyFailure, extractJsonObject, generateCommitPlan, validateGroupPlan, validatePlan } from "../src/ai.ts";
+import {
+	classifyFailure,
+	extractJsonObject,
+	extractSubjects,
+	generateCommitPlan,
+	validateGroupPlan,
+	validatePlan,
+	type PlanEvent,
+} from "../src/ai.ts";
 import type { Profile } from "../src/config.ts";
 import type { StagedFile } from "../src/git.ts";
 
@@ -403,4 +412,110 @@ test("manual clears every body the model returns", async () => {
 	});
 	assert.equal(plan.commits[0]?.body, "");
 	assert.equal(plan.commits[0]?.subject, "feat: x");
+});
+
+test("subjects are recovered from a partially written response", () => {
+	assert.deepEqual(extractSubjects(""), []);
+	assert.deepEqual(extractSubjects('{"commits":[{"subject":"feat: a'), ["feat: a"]);
+	assert.deepEqual(extractSubjects('{"commits":[{"subject":"feat: a","body":"","files":["x"]},{"subject":"fix: b'), [
+		"feat: a",
+		"fix: b",
+	]);
+	assert.deepEqual(extractSubjects('{"commits":[{"subject":"chore: say \\"hi\\" now'), ['chore: say "hi" now']);
+	assert.deepEqual(extractSubjects('{"commits":[{"subject":"docs: a\\nb'), ["docs: a\nb"]);
+});
+
+test("retries are reported through onProgress", async () => {
+	const events: string[] = [];
+	let call = 0;
+	await generateCommitPlan({
+		profile: { provider: "openai", baseUrl: "https://example.invalid/v1", model: "m", apiKey: "k" },
+		files: [{ path: "a.ts", status: "M", added: 1, deleted: 0, bytes: 10, head: "", truncated: false, binary: false }],
+		paths: ["a.ts"],
+		renames: [],
+		history: [],
+		context: { root: "/r", instructions: [], context: [] },
+		split: false,
+		body: "auto",
+		onProgress: (event) => events.push(event.type),
+		generate: async () => {
+			if (call++ === 0) throw new Error("The response must contain at least one commit.");
+			return { commits: [{ subject: "feat: x", body: "", files: ["a.ts"] }] };
+		},
+	});
+	assert.ok(events.includes("retry"), `expected a retry event, saw ${events.join(", ")}`);
+	assert.ok(events.includes("phase"));
+});
+
+/**
+ * The retry machine is exercised through the injected `generate` seam everywhere else, which never
+ * reaches `callModel`. These drive the real streaming path against a local server instead, because
+ * `streamText` reports transport failures only through `onError`: reading `finishReason` first would
+ * turn every one of them into an `AI_NoOutputGeneratedError` and reclassify it as transient.
+ */
+const streamingPlan = '{"commits":[{"subject":"feat: streamed","body":"why","files":["a.ts"]}]}';
+let respond: (response: ServerResponse) => void = () => {};
+const streamServer = createServer((request, response) => {
+	request.resume();
+	request.on("end", () => respond(response));
+});
+
+function sendStream(response: ServerResponse, pieces: string[], finishReason = "stop") {
+	response.writeHead(200, { "content-type": "text/event-stream" });
+	for (const content of pieces) {
+		response.write(`data: ${JSON.stringify({ id: "1", choices: [{ index: 0, delta: { content } }] })}\n\n`);
+	}
+	response.write(
+		`data: ${JSON.stringify({ id: "1", choices: [{ index: 0, delta: {}, finish_reason: finishReason }] })}\n\n`
+	);
+	response.end("data: [DONE]\n\n");
+}
+
+function planFrom(baseUrl: string, onProgress: (event: PlanEvent) => void) {
+	return generateCommitPlan({
+		profile: { provider: "compatible", baseUrl, model: "m", apiKey: "k" },
+		files: [staged("a.ts")],
+		paths: ["a.ts"],
+		renames: [],
+		history: [],
+		context,
+		split: false,
+		body: "auto",
+		onProgress,
+	});
+}
+
+void test("streams subjects from the provider and keeps failure classification intact", async (t) => {
+	// The compatible provider warns that it cannot enforce a schema, which is noise here.
+	(globalThis as { AI_SDK_LOG_WARNINGS?: boolean }).AI_SDK_LOG_WARNINGS = false;
+	await new Promise<void>((resolve) => streamServer.listen(0, "127.0.0.1", resolve));
+	t.after(() => streamServer.close());
+	const address = streamServer.address();
+	assert(address && typeof address === "object");
+	const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+
+	// Chunked so the subject arrives over several partial parses rather than in one piece.
+	const pieces = streamingPlan.match(/[\s\S]{1,7}/g) ?? [];
+	respond = (response) => sendStream(response, pieces);
+	const events: PlanEvent[] = [];
+	const plan = await planFrom(baseUrl, (event) => events.push(event));
+	assert.equal(plan.commits[0]?.subject, "feat: streamed");
+	assert.equal(plan.fallback, undefined);
+	const subjects = events.filter((event) => event.type === "subject");
+	assert.ok(subjects.length > 1, `expected progressive subjects, saw ${subjects.length}`);
+	assert.deepEqual(subjects.at(-1), { type: "subject", index: 0, text: "feat: streamed" });
+
+	// Fenced output cannot be coerced, so the raw text has to be salvaged instead.
+	respond = (response) => sendStream(response, ["```json\n", streamingPlan, "\n```"]);
+	assert.equal((await planFrom(baseUrl, () => {})).commits[0]?.subject, "feat: streamed");
+
+	// A credential failure must still reach classifyFailure as itself, not as a stream-ended error.
+	respond = (response) => {
+		response.writeHead(401, { "content-type": "application/json" });
+		response.end(JSON.stringify({ error: { message: "Unauthorized" } }));
+	};
+	await assert.rejects(
+		planFrom(baseUrl, () => {}),
+		/Unauthorized/
+	);
 });
