@@ -77,11 +77,13 @@ Both editors are modal too, and both leave the commit as it was when you cancel:
 | -------- | ------------------------------- | ----------------------------- |
 | `↵`      | Save the subject                | Insert a newline              |
 | `ctrl+d` | Nothing                         | Save the body                 |
-| `ctrl+e` | Nothing                         | Open the body in `$EDITOR`    |
+| `ctrl+e` | Nothing                         | Open both in the editor       |
 | `↑` `↓`  | Nothing                         | Move between the body's lines |
 | `esc`    | Cancel, keeping the old subject | Cancel, keeping the old body  |
 
-`ctrl+e` is therefore available from the list and from the body editor, but not from the subject editor.
+`ctrl+e` is therefore available from the list and from the body editor, but not from the subject editor. It always opens
+the subject and the body together in `$VISUAL` or `$EDITOR`, with the subject on the first line, so editing that line
+changes the subject as well.
 
 Every commit uses normal `git commit`, so existing hooks and signing configuration still apply. If a later commit in a
 split plan fails, earlier successful commits remain and all uncommitted patches are restored to the index.
