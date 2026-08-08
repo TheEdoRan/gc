@@ -93,6 +93,7 @@ test("retries invalid model output once with the validation error", async () => 
 		history: [],
 		context,
 		split: true,
+		body: "auto",
 		generate: async (prompt) => {
 			prompts.push(prompt);
 			return prompts.length === 1
@@ -117,6 +118,7 @@ test("makes exactly one model call for an oversized diff", async () => {
 		history: [],
 		context,
 		split: false,
+		body: "auto",
 		generate: async (prompt) => {
 			prompts.push(prompt);
 			return { commits: [{ subject: "feat: update large", body: "", files: ["large.ts"] }] };
@@ -140,6 +142,7 @@ test("switches to group ids when the path echo cannot fit the output budget", as
 		history: [],
 		context,
 		split: false,
+		body: "auto",
 		generate: async (text) => {
 			prompt = text;
 			const ids = [...text.matchAll(/^(g\d+)\s{2}/gm)].map((match) => match[1]!);
@@ -162,6 +165,7 @@ test("halves the budget and retries when the provider rejects the prompt length"
 		history: [],
 		context,
 		split: false,
+		body: "auto",
 		generate: async (prompt) => {
 			sizes.push(Buffer.byteLength(prompt));
 			if (sizes.length === 1) throw new Error("400 prompt is too long: 40000 tokens > 8192 maximum");
@@ -183,6 +187,7 @@ test("retries a transient failure before falling back to a local plan", async ()
 		history: [],
 		context,
 		split: true,
+		body: "auto",
 		generate: async () => {
 			calls++;
 			throw new Error("fetch failed: ECONNREFUSED");
@@ -207,6 +212,7 @@ test("recovers when a transient failure clears", async () => {
 		history: [],
 		context,
 		split: false,
+		body: "auto",
 		generate: async () => {
 			if (++calls === 1) throw new Error("429 rate limit exceeded");
 			return { commits: [{ subject: "feat: add a", body: "", files: ["a.ts"] }] };
@@ -227,6 +233,7 @@ test("drops to unstructured output only when the provider refuses a schema", asy
 		history: [],
 		context,
 		split: false,
+		body: "auto",
 		generate: async (_prompt, structured) => {
 			modes.push(structured);
 			if (modes.length === 1) throw new Error("400 response_format json_schema is not supported by this model");
@@ -247,6 +254,7 @@ test("keeps structured output when the failure says nothing about schemas", asyn
 		history: [],
 		context,
 		split: false,
+		body: "auto",
 		generate: async (_prompt, structured) => {
 			modes.push(structured);
 			throw new Error("The operation was aborted due to timeout");
@@ -268,6 +276,7 @@ test("lowers the output ceiling, not the diff, when the provider refuses max_tok
 		history: [],
 		context,
 		split: false,
+		body: "auto",
 		generate: async (prompt) => {
 			sizes.push(Buffer.byteLength(prompt));
 			if (sizes.length === 1) throw new Error("400 max_tokens is greater than the maximum allowed for this model");
@@ -290,6 +299,7 @@ test("throws instead of hiding an unusable configuration behind a local plan", a
 			history: [],
 			context,
 			split: false,
+			body: "auto",
 			generate: async () => {
 				throw new Error("401 Unauthorized: invalid api key");
 			},
@@ -308,6 +318,7 @@ test("states the required response shape in every prompt", async () => {
 		history: [],
 		context,
 		split: false,
+		body: "auto",
 		generate: async (text) => {
 			prompt = text;
 			return { commits: [{ subject: "feat: add a", body: "", files: ["a.ts"] }] };
@@ -353,6 +364,7 @@ test("falls back to a local plan when validation never succeeds", async () => {
 		history: [],
 		context,
 		split: true,
+		body: "auto",
 		generate: async () => ({ commits: [{ subject: "x", body: "", files: ["nope.ts"] }] }),
 	});
 	assert.equal(plan.fallback, true);
@@ -368,10 +380,27 @@ test("reports what the model was shown", async () => {
 		history: [],
 		context,
 		split: false,
+		body: "auto",
 		generate: async () => ({
 			commits: [{ subject: "chore: bump deps", body: "", files: ["a.ts", "pnpm-lock.yaml"] }],
 		}),
 	});
 	assert.ok(plan.notice);
 	assert.match(plan.notice ?? "", /reduced/);
+});
+
+test("manual clears every body the model returns", async () => {
+	const plan = await generateCommitPlan({
+		profile: { provider: "openai", baseUrl: "https://example.invalid/v1", model: "m", apiKey: "k" },
+		files: [{ path: "a.ts", status: "M", added: 1, deleted: 0, bytes: 10, head: "", truncated: false, binary: false }],
+		paths: ["a.ts"],
+		renames: [],
+		history: [],
+		context: { root: "/r", instructions: [], context: [] },
+		split: false,
+		body: "manual",
+		generate: async () => ({ commits: [{ subject: "feat: x", body: "an unwanted body", files: ["a.ts"] }] }),
+	});
+	assert.equal(plan.commits[0]?.body, "");
+	assert.equal(plan.commits[0]?.subject, "feat: x");
 });

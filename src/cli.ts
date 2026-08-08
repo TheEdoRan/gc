@@ -4,12 +4,20 @@ import { editor, select } from "@inquirer/prompts";
 
 import packageJson from "../package.json" with { type: "json" };
 import { DEFAULT_MAX_INPUT_TOKENS, generateCommitPlan, type CommitPlan } from "./ai.ts";
-import { mergeConfig, readConfig, readProjectConfig, runInit, runProfile } from "./config.ts";
+import {
+	BODY_MODES,
+	mergeConfig,
+	readConfig,
+	readProjectConfig,
+	runInit,
+	runProfile,
+	type BodyMode,
+} from "./config.ts";
 import { discoverContext } from "./context.ts";
 import { createCommits, readRepository } from "./git.ts";
 
 export const help = `Usage:
-  gc [-a|--all] [-i|--instructions <text>] [--split|--no-split]
+  gc [-a|--all] [-i|--instructions <text>] [--split|--no-split] [--body <mode>]
   gc init
   gc profile [name]
   gc --help
@@ -20,7 +28,7 @@ export type CliArguments =
 	| { command: "version"; all: false }
 	| { command: "init"; all: false }
 	| { command: "profile"; name?: string; all: false }
-	| { command: "commit"; all: boolean; instructions?: string; split?: boolean };
+	| { command: "commit"; all: boolean; instructions?: string; split?: boolean; body?: BodyMode };
 
 export function parseCliArgs(args: string[]): CliArguments {
 	const parsed = parseArgs({
@@ -32,12 +40,17 @@ export function parseCliArgs(args: string[]): CliArguments {
 			instructions: { type: "string", short: "i" },
 			split: { type: "boolean" },
 			"no-split": { type: "boolean" },
+			body: { type: "string" },
 			help: { type: "boolean", short: "h" },
 			version: { type: "boolean", short: "v" },
 		},
 	});
 	if (parsed.values.split && parsed.values["no-split"])
 		throw new Error("--split and --no-split cannot be used together.");
+	const body = parsed.values.body;
+	if (body !== undefined && !BODY_MODES.some((mode) => mode === body)) {
+		throw new Error(`--body must be one of: ${BODY_MODES.join(", ")}.`);
+	}
 	if (parsed.values.help) return { command: "help", all: false };
 	if (parsed.values.version) return { command: "version", all: false };
 
@@ -46,7 +59,13 @@ export function parseCliArgs(args: string[]): CliArguments {
 		throw new Error(`Invalid command.\n\n${help}`);
 	}
 	if (command) {
-		if (parsed.values.all || parsed.values.instructions || parsed.values.split || parsed.values["no-split"]) {
+		if (
+			parsed.values.all ||
+			parsed.values.instructions ||
+			parsed.values.split ||
+			parsed.values["no-split"] ||
+			body !== undefined
+		) {
 			throw new Error(`Commit options cannot be used with gc ${command}.`);
 		}
 		return command === "init"
@@ -58,6 +77,7 @@ export function parseCliArgs(args: string[]): CliArguments {
 		all: parsed.values.all,
 		...(parsed.values.instructions ? { instructions: parsed.values.instructions } : {}),
 		...(parsed.values.split ? { split: true } : parsed.values["no-split"] ? { split: false } : {}),
+		...(body !== undefined ? { body: body as BodyMode } : {}),
 	};
 }
 
@@ -172,6 +192,7 @@ export async function run(args = process.argv.slice(2)): Promise<void> {
 				history: repository.history,
 				context,
 				split,
+				body: options.body ?? merged.body,
 				exclude: merged.excludeContent,
 				include: merged.includeContent,
 				...(options.instructions ? { instructions: options.instructions } : {}),

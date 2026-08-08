@@ -18,6 +18,11 @@ test("parses public CLI arguments", () => {
 	assert.match(help, /gc profile \[name\]/);
 });
 
+test("parses the body flag", () => {
+	assert.deepEqual(parseCliArgs(["--body", "always"]), { command: "commit", all: false, body: "always" });
+	assert.throws(() => parseCliArgs(["--body", "sometimes"]), /manual, auto, always/);
+});
+
 test("edits one message then returns to the full review", async () => {
 	const plan = { commits: [{ subject: "old", body: "", files: ["a.ts"] }] };
 	const answers: unknown[] = ["edit", 0, "commit"];

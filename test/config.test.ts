@@ -123,8 +123,9 @@ void test("merges project settings over the global config", () => {
 		excludeContent: ["dist/**", "out/**"],
 		includeContent: ["a.txt"],
 		split: false,
+		body: "manual",
 	});
-	assert.deepEqual(mergeConfig(config), { excludeContent: [], includeContent: [], split: true });
+	assert.deepEqual(mergeConfig(config), { excludeContent: [], includeContent: [], split: true, body: "manual" });
 });
 
 void test("uses the platform config directory", () => {
@@ -137,7 +138,7 @@ void test("creates a compatible profile with an empty key", async () => {
 	const prompts: ConfigPrompts = {
 		input: async () => answers.shift() ?? "",
 		password: async () => "",
-		select: async () => "compatible",
+		select: async (options) => (options.message === "Commit bodies" ? "manual" : "compatible"),
 		confirm: async () => false,
 	};
 	const modelPrompts: ModelPrompts = {
@@ -152,6 +153,7 @@ void test("creates a compatible profile with an empty key", async () => {
 	assert.deepEqual(created, {
 		activeProfile: "work",
 		split: false,
+		body: "manual",
 		profiles: {
 			work: { provider: "compatible", baseUrl: "http://localhost:11434/v1", model: "local-model", apiKey: "" },
 		},
@@ -162,7 +164,7 @@ void test("updates a profile without exposing or replacing its stored key", asyn
 	const prompts: ConfigPrompts = {
 		input: async () => "https://api.openai.com/v1/",
 		password: async () => "",
-		select: async () => "openai",
+		select: async (options) => (options.message === "Commit bodies" ? "manual" : "openai"),
 		confirm: async () => true,
 	};
 	const modelPrompts: ModelPrompts = {
@@ -194,4 +196,29 @@ void test("switches the active profile directly", async () => {
 	);
 	assert.equal((await selectProfile("work", { path })).activeProfile, "work");
 	assert.equal((await readConfig(path))?.activeProfile, "work");
+});
+
+void test("body defaults to manual and rejects unknown values", async () => {
+	const parsed = validateConfig({
+		activeProfile: "personal",
+		split: true,
+		profiles: { personal: { provider: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-5", apiKey: "k" } },
+	});
+	assert.equal(parsed.body, undefined);
+	assert.equal(mergeConfig(parsed).body, "manual");
+
+	assert.equal(validateConfig({ ...parsed, body: "always" }).body, "always");
+	assert.throws(() => validateConfig({ ...parsed, body: "sometimes" }), /Invalid body setting/);
+});
+
+void test("body resolves project over user and is allowed in .gc.yaml", () => {
+	const parsed = validateConfig({
+		activeProfile: "personal",
+		split: true,
+		body: "auto",
+		profiles: { personal: { provider: "openai", baseUrl: "https://api.openai.com/v1", model: "gpt-5", apiKey: "k" } },
+	});
+	assert.equal(mergeConfig(parsed).body, "auto");
+	assert.equal(mergeConfig(parsed, validateProjectConfig({ body: "always" })).body, "always");
+	assert.throws(() => validateProjectConfig({ body: "nope" }), /Invalid body setting/);
 });

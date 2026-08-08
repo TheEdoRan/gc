@@ -1,6 +1,8 @@
 import { realpath, readFile } from "node:fs/promises";
 import path from "node:path";
 
+import type { BodyMode } from "./config.ts";
+
 export interface RepositoryContext {
 	root: string;
 	instructions: Array<{ path: string; content: string }>;
@@ -139,6 +141,13 @@ export function clampDocuments<T extends { path: string; content: string }>(docu
  * honours, so it is always sent rather than being reserved for the unstructured retry. It also
  * carries the literal word "json", which some endpoints require before they will emit JSON at all.
  */
+const BODY_INSTRUCTIONS: Record<BodyMode, string> = {
+	manual:
+		"Bodies: leave every body an empty string. The user requests bodies separately for the commits that need one.",
+	auto: "Bodies: write a body only when the subject alone cannot carry the change. Most commits need none, so an empty body is the normal answer.",
+	always: "Bodies: every commit must have a body that explains why the change was made.",
+};
+
 function responseContract(grouped: boolean): string {
 	const key = grouped ? "groups" : "files";
 	const item = grouped ? "group id exactly as listed above, such as g1" : "staged path, copied exactly";
@@ -154,6 +163,7 @@ export function buildPrompt(input: {
 	history: string[];
 	context: RepositoryContext;
 	split: boolean;
+	body: BodyMode;
 	groups?: PromptGroup[];
 	renames?: Array<[string, string]>;
 	instructions?: string;
@@ -191,7 +201,8 @@ ${instructionSections.join("\n\n") || "No repository-specific instructions."}
 Repository history (use its style when it does not conflict):
 ${history}
 
-Fallback convention: Conventional Commits. Subject lines must be concise. Bodies may be empty.
+Fallback convention: Conventional Commits. Subject lines must be concise.
+${BODY_INSTRUCTIONS[input.body]}
 Splitting is ${input.split ? "enabled; use one or more whole-file groups when that improves coherence" : "disabled; return exactly one commit"}.
 ${input.groups ? "Every group id must appear exactly once." : "Every staged path must appear exactly once. Keep both sides of a rename in the same commit."}
 

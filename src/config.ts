@@ -16,6 +16,7 @@ export interface Config {
 	profiles: Record<string, Profile>;
 	excludeContent?: string[];
 	includeContent?: string[];
+	body?: BodyMode;
 }
 
 /** `<repo>/.gc.yaml`. Committed to the repository, so it can never carry credentials. */
@@ -23,7 +24,11 @@ export interface ProjectConfig {
 	excludeContent?: string[];
 	includeContent?: string[];
 	split?: boolean;
+	body?: BodyMode;
 }
+
+export type BodyMode = "manual" | "auto" | "always";
+export const BODY_MODES: readonly BodyMode[] = ["manual", "auto", "always"];
 
 export interface ConfigPrompts {
 	input(options: {
@@ -59,9 +64,9 @@ const configPrompts: ConfigPrompts = {
 };
 
 const configKeys = ["activeProfile", "split", "profiles"];
-const globKeys = ["excludeContent", "includeContent"];
+const optionalConfigKeys = ["excludeContent", "includeContent", "body"];
 const profileKeys = ["provider", "baseUrl", "model", "apiKey"];
-const projectKeys = ["excludeContent", "includeContent", "split"];
+const projectKeys = ["excludeContent", "includeContent", "split", "body"];
 /** Credentials must come from the user config only, never from a file committed to a repository. */
 const forbiddenProjectKeys = ["apiKey", "profiles", "activeProfile"];
 const providers: Provider[] = ["openai", "anthropic", "compatible"];
@@ -94,6 +99,16 @@ function isProvider(value: unknown): value is Provider {
 	return typeof value === "string" && providers.some((provider) => provider === value);
 }
 
+function isBodyMode(value: unknown): value is BodyMode {
+	return typeof value === "string" && BODY_MODES.some((mode) => mode === value);
+}
+
+function bodyMode(value: Record<string, unknown>, key: string) {
+	if (!Object.hasOwn(value, key)) return {};
+	if (!isBodyMode(value[key])) throw new Error(`Invalid body setting: expected one of ${BODY_MODES.join(", ")}`);
+	return { body: value[key] };
+}
+
 function validUrl(value: string) {
 	try {
 		return ["http:", "https:"].includes(new URL(value).protocol);
@@ -103,7 +118,9 @@ function validUrl(value: string) {
 }
 
 export function validateConfig(value: unknown): Config {
-	if (!isRecord(value) || !allowedKeys(value, configKeys, globKeys)) throw new Error("Invalid config structure");
+	if (!isRecord(value) || !allowedKeys(value, configKeys, optionalConfigKeys)) {
+		throw new Error("Invalid config structure");
+	}
 	if (typeof value.activeProfile !== "string" || !value.activeProfile.trim()) {
 		throw new Error("Invalid activeProfile");
 	}
@@ -163,6 +180,7 @@ export function validateConfig(value: unknown): Config {
 		profiles,
 		...globs(value, "excludeContent", "config"),
 		...globs(value, "includeContent", "config"),
+		...bodyMode(value, "body"),
 	};
 }
 
@@ -183,6 +201,7 @@ export function validateProjectConfig(value: unknown): ProjectConfig {
 		...globs(value, "excludeContent", "project config"),
 		...globs(value, "includeContent", "project config"),
 		...(Object.hasOwn(value, "split") ? { split: value.split as boolean } : {}),
+		...bodyMode(value, "body"),
 	};
 }
 
@@ -202,12 +221,13 @@ export async function readProjectConfig(root: string): Promise<ProjectConfig | u
 	return validateProjectConfig(parsed);
 }
 
-/** Project globs extend the global ones, which extend the built-in defaults. `split` is overridden, not merged. */
+/** Project globs extend the global ones, which extend the built-in defaults. `split` and `body` are overridden, not merged. */
 export function mergeConfig(global: Config, project?: ProjectConfig) {
 	return {
 		excludeContent: [...(global.excludeContent ?? []), ...(project?.excludeContent ?? [])],
 		includeContent: [...(global.includeContent ?? []), ...(project?.includeContent ?? [])],
 		split: project?.split ?? global.split,
+		body: project?.body ?? global.body ?? "manual",
 	};
 }
 
@@ -300,6 +320,17 @@ export async function setupProfile(
 		options.modelPrompts,
 		options.fetcher
 	);
+	const selectedBody = await prompts.select({
+		message: "Commit bodies",
+		default: config?.body ?? "manual",
+		choices: [
+			{ name: "Only when I ask for one", value: "manual" },
+			{ name: "When the subject cannot carry the change", value: "auto" },
+			{ name: "Always", value: "always" },
+		],
+	});
+	if (!isBodyMode(selectedBody)) throw new Error("Invalid body selection");
+	const body = selectedBody;
 	// Keep the fields the prompts never ask about instead of silently dropping them on an update.
 	const next: Config = {
 		activeProfile: name,
@@ -307,6 +338,7 @@ export async function setupProfile(
 			message: "Split unrelated changes into separate commits?",
 			default: config?.split ?? true,
 		}),
+		body,
 		profiles: {
 			...config?.profiles,
 			[name]: {

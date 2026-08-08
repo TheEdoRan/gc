@@ -3,7 +3,7 @@ import { createOpenAI } from "@ai-sdk/openai";
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { generateText, jsonSchema, NoObjectGeneratedError, Output } from "ai";
 
-import type { Profile } from "./config.ts";
+import type { BodyMode, Profile } from "./config.ts";
 import { buildPrompt, type PromptGroup, type RepositoryContext } from "./context.ts";
 import { buildEvidence, buildFallbackPlan, buildGroups } from "./evidence.ts";
 import type { StagedFile } from "./git.ts";
@@ -377,6 +377,7 @@ export async function generateCommitPlan(input: {
 	history: string[];
 	context: RepositoryContext;
 	split: boolean;
+	body: BodyMode;
 	instructions?: string;
 	exclude?: string[];
 	include?: string[];
@@ -424,6 +425,7 @@ export async function generateCommitPlan(input: {
 			history: input.history,
 			context: input.context,
 			split: input.split,
+			body: input.body,
 			renames: input.renames,
 			documentBudget,
 			...(groups ? { groups } : {}),
@@ -485,6 +487,9 @@ export async function generateCommitPlan(input: {
 			const plan = groups
 				? validateGroupPlan(output, groups, input.split)
 				: validatePlan(output, input.paths, input.renames, input.split);
+			// Asking for empty bodies saves output tokens. Clearing them here is what makes the
+			// setting true regardless of what the model actually returned.
+			if (input.body === "manual") for (const commit of plan.commits) commit.body = "";
 			return { ...plan, notice };
 		} catch (error) {
 			failureReason = clampFeedback(error instanceof Error ? error.message : String(error));
