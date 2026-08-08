@@ -14,7 +14,7 @@
 
   Profiles accept an optional `maxInputTokens` for models with a small context window. The default budget is 32,000 input
   tokens, estimated at two UTF-8 bytes per token; a provider that rejects the request for length triggers one halved
-  retry. Requests now carry a 30 second deadline.
+  retry.
 
   When there are too many staged paths for the model to list them back, `gc` groups them locally and asks the model to
   name the groups instead. If the provider fails outright, `gc` produces a local fallback plan covering every staged path
@@ -38,7 +38,7 @@
   key or model name now raises that error rather than hiding it behind a local plan, and a fallback reports why the
   provider was given up on.
 
-  The output ceiling is 16,000 tokens by default and configurable per profile as `maxOutputTokens`. Reasoning models spend
+  The output ceiling is 16,384 tokens by default and configurable per profile as `maxOutputTokens`. Reasoning models spend
   an unreported share of the output budget before writing anything, and the previous 4,096 ceiling was routinely consumed
   in full, returning nothing. The request deadline moves from 30 seconds to 120 seconds, with a 180 second limit on the
   whole plan, and the CLI prints elapsed time while it waits.
