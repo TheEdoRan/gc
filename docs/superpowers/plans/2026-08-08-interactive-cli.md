@@ -36,10 +36,12 @@ Three implementation decisions that simplify the spec without changing its behav
 ### Task 1: `src/terminal.ts`, color and spinner
 
 **Files:**
+
 - Create: `src/terminal.ts`
 - Test: `test/terminal.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces:
   - `interface Terminal { stream: NodeJS.WritableStream; color: boolean; interactive: boolean }`
@@ -274,6 +276,7 @@ line per phase when the region cannot be redrawn."
 ### Task 2: the `body` setting
 
 **Files:**
+
 - Modify: `src/config.ts` (types, key lists, `validateConfig`, `validateProjectConfig`, `mergeConfig`, `setupProfile`)
 - Modify: `src/context.ts` (`buildPrompt`)
 - Modify: `src/ai.ts` (`generateCommitPlan` input, clearing bodies in `manual`)
@@ -281,6 +284,7 @@ line per phase when the region cannot be redrawn."
 - Test: `test/config.test.ts`, `test/context.test.ts`, `test/ai.test.ts`, `test/cli.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing from Task 1.
 - Produces:
   - `type BodyMode = "manual" | "auto" | "always"` exported from `src/config.ts`
@@ -421,16 +425,16 @@ export function mergeConfig(global: Config, project?: ProjectConfig) {
 In `setupProfile`, ask for it and carry it into the returned config, next to the existing `split` question:
 
 ```ts
-	const body = await prompts.select({
-		message: "Commit bodies",
-		default: config?.body ?? "manual",
-		choices: [
-			{ name: "Only when I ask for one", value: "manual" },
-			{ name: "When the subject cannot carry the change", value: "auto" },
-			{ name: "Always", value: "always" },
-		],
-	});
-	if (!isBodyMode(body)) throw new Error("Invalid body selection");
+const body = await prompts.select({
+	message: "Commit bodies",
+	default: config?.body ?? "manual",
+	choices: [
+		{ name: "Only when I ask for one", value: "manual" },
+		{ name: "When the subject cannot carry the change", value: "auto" },
+		{ name: "Always", value: "always" },
+	],
+});
+if (!isBodyMode(body)) throw new Error("Invalid body selection");
 ```
 
 and add `body,` to the `next: Config` object literal.
@@ -445,8 +449,7 @@ import type { BodyMode } from "./config.ts";
 const BODY_INSTRUCTIONS: Record<BodyMode, string> = {
 	manual:
 		"Bodies: leave every body an empty string. The user requests bodies separately for the commits that need one.",
-	auto:
-		"Bodies: write a body only when the subject alone cannot carry the change. Most commits need none, so an empty body is the normal answer.",
+	auto: "Bodies: write a body only when the subject alone cannot carry the change. Most commits need none, so an empty body is the normal answer.",
 	always: "Bodies: every commit must have a body that explains why the change was made.",
 };
 ```
@@ -495,10 +498,10 @@ In `src/cli.ts`, add to `parseArgs` options:
 Validate right after the split check:
 
 ```ts
-	const body = parsed.values.body;
-	if (body !== undefined && !BODY_MODES.some((mode) => mode === body)) {
-		throw new Error(`--body must be one of: ${BODY_MODES.join(", ")}.`);
-	}
+const body = parsed.values.body;
+if (body !== undefined && !BODY_MODES.some((mode) => mode === body)) {
+	throw new Error(`--body must be one of: ${BODY_MODES.join(", ")}.`);
+}
 ```
 
 Add `body?: BodyMode` to the `command: "commit"` member of `CliArguments`, spread it conditionally into the returned object, add `body` to the guard that rejects commit options on `gc init` and `gc profile`, and add `[--body <mode>]` to the `help` string. In `run()`, pass `body: options.body ?? merged.body` to `generateCommitPlan`.
@@ -528,11 +531,13 @@ configuration keeps validating and defaults to manual."
 ### Task 3: split `parseRepository` out of `readRepository`
 
 **Files:**
+
 - Modify: `src/git.ts`
 - Create: `test/fixtures/staged/single.diff`, `test/fixtures/staged/single.names`, `test/fixtures/staged/mixed.diff`, `test/fixtures/staged/mixed.names`, `test/fixtures/staged/rename.diff`, `test/fixtures/staged/rename.names`, `test/fixtures/staged/history.json`
 - Test: `test/git.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing from Tasks 1 and 2.
 - Produces:
   - `function parseRepository(diff: Buffer, names: Buffer, history: string[], retainBudgetBytes?: number): Omit<RepositoryChanges, "root">`
@@ -656,11 +661,11 @@ function consumeLines(buffer: Buffer, onLine: (line: Buffer) => void): Buffer {
 Rewrite the loop inside `streamLines` to use it:
 
 ```ts
-	let pending: Buffer = Buffer.alloc(0);
-	for await (const chunk of child.stdout as AsyncIterable<Buffer>) {
-		pending = consumeLines(pending.length > 0 ? Buffer.concat([pending, chunk]) : chunk, onLine);
-	}
-	if (pending.length > 0) onLine(pending);
+let pending: Buffer = Buffer.alloc(0);
+for await (const chunk of child.stdout as AsyncIterable<Buffer>) {
+	pending = consumeLines(pending.length > 0 ? Buffer.concat([pending, chunk]) : chunk, onLine);
+}
+if (pending.length > 0) onLine(pending);
 ```
 
 Add the new export, holding everything `readRepository` currently does after its git calls:
@@ -722,10 +727,14 @@ function finishRepository(
 `readRepository` keeps its streaming call and ends with:
 
 ```ts
-	return {
-		root,
-		...finishRepository(parser, names.stdout, log.code === 0 ? log.stdout.toString("utf8").trimEnd().split("\n").filter(Boolean) : []),
-	};
+return {
+	root,
+	...finishRepository(
+		parser,
+		names.stdout,
+		log.code === 0 ? log.stdout.toString("utf8").trimEnd().split("\n").filter(Boolean) : []
+	),
+};
 ```
 
 - [ ] **Step 5: Run the tests and verify they pass**
@@ -751,11 +760,13 @@ bound actually matters."
 ### Task 4: the demo harness
 
 **Files:**
+
 - Create: `scripts/demo.ts`
 - Create: `test/fixtures/staged/single.plan.json`, `test/fixtures/staged/mixed.plan.json`, `test/fixtures/staged/rename.plan.json`
 - Modify: `package.json` (`demo` script), `tsconfig.json` (`include`), `src/ai.ts` (`generate` gains an emitter parameter)
 
 **Interfaces:**
+
 - Consumes: `parseRepository` from Task 3, `mergeConfig` and `BodyMode` from Task 2.
 - Produces: `pnpm demo`. Nothing importable.
 
@@ -983,11 +994,13 @@ without a provider."
 ### Task 5: stream subjects and drive the spinner
 
 **Files:**
+
 - Modify: `src/ai.ts` (`callModel`, `generateCommitPlan`)
 - Modify: `src/cli.ts` (`run`, replacing the ticker)
 - Test: `test/ai.test.ts`
 
 **Interfaces:**
+
 - Consumes: `PlanEvent` from Task 4, `createSpinner` and `createTerminal` from Task 1.
 - Produces:
   - `function extractSubjects(text: string): string[]` exported from `src/ai.ts`
@@ -1149,7 +1162,7 @@ async function callModel(input: {
 In `generateCommitPlan`, immediately before `calls++`:
 
 ```ts
-		input.onProgress?.({ type: "phase", label: `waiting for ${input.profile.model}` });
+input.onProgress?.({ type: "phase", label: `waiting for ${input.profile.model}` });
 ```
 
 Pass `...(input.onProgress ? { onProgress: input.onProgress } : {})` into the `callModel` call inside the default `generate`.
@@ -1157,41 +1170,41 @@ Pass `...(input.onProgress ? { onProgress: input.onProgress } : {})` into the `c
 Emit a `retry` event from each `continue` branch of the failure switch and from the validation `catch`. Add one line before each `continue`, with the reason each branch already computes:
 
 ```ts
-			if (kind === "response-format" && structured) {
-				structured = false;
-				input.onProgress?.({ type: "retry", attempt: calls, reason: "the endpoint refused a schema" });
-				continue;
-			}
-			if (kind === "input-limit" && budgetTokens > MIN_INPUT_TOKENS) {
-				budgetTokens = Math.max(MIN_INPUT_TOKENS, Math.floor(budgetTokens / 2));
-				validationError = undefined;
-				input.onProgress?.({ type: "retry", attempt: calls, reason: `halved the input budget to ${budgetTokens}` });
-				continue;
-			}
-			if (kind === "output-limit" && outputTokens > MIN_OUTPUT_TOKENS) {
-				outputTokens = Math.max(MIN_OUTPUT_TOKENS, Math.floor(outputTokens / 2));
-				validationError = undefined;
-				input.onProgress?.({ type: "retry", attempt: calls, reason: `halved the output ceiling to ${outputTokens}` });
-				continue;
-			}
-			if (kind === "length" || kind === "invalid-output") {
-				if (++contentFailures > MAX_CONTENT_FAILURES) break;
-				validationError = clampFeedback(error instanceof Error ? error.message : String(error));
-				input.onProgress?.({ type: "retry", attempt: calls, reason: validationError });
-				continue;
-			}
-			input.onProgress?.({ type: "retry", attempt: calls, reason: failureReason });
-			// Transient: the request was fine, so repeat it unchanged while time remains.
-			continue;
+if (kind === "response-format" && structured) {
+	structured = false;
+	input.onProgress?.({ type: "retry", attempt: calls, reason: "the endpoint refused a schema" });
+	continue;
+}
+if (kind === "input-limit" && budgetTokens > MIN_INPUT_TOKENS) {
+	budgetTokens = Math.max(MIN_INPUT_TOKENS, Math.floor(budgetTokens / 2));
+	validationError = undefined;
+	input.onProgress?.({ type: "retry", attempt: calls, reason: `halved the input budget to ${budgetTokens}` });
+	continue;
+}
+if (kind === "output-limit" && outputTokens > MIN_OUTPUT_TOKENS) {
+	outputTokens = Math.max(MIN_OUTPUT_TOKENS, Math.floor(outputTokens / 2));
+	validationError = undefined;
+	input.onProgress?.({ type: "retry", attempt: calls, reason: `halved the output ceiling to ${outputTokens}` });
+	continue;
+}
+if (kind === "length" || kind === "invalid-output") {
+	if (++contentFailures > MAX_CONTENT_FAILURES) break;
+	validationError = clampFeedback(error instanceof Error ? error.message : String(error));
+	input.onProgress?.({ type: "retry", attempt: calls, reason: validationError });
+	continue;
+}
+input.onProgress?.({ type: "retry", attempt: calls, reason: failureReason });
+// Transient: the request was fine, so repeat it unchanged while time remains.
+continue;
 ```
 
 and in the validation `catch`:
 
 ```ts
-			failureReason = clampFeedback(error instanceof Error ? error.message : String(error));
-			if (++contentFailures > MAX_CONTENT_FAILURES) break;
-			validationError = failureReason;
-			input.onProgress?.({ type: "retry", attempt: calls, reason: failureReason });
+failureReason = clampFeedback(error instanceof Error ? error.message : String(error));
+if (++contentFailures > MAX_CONTENT_FAILURES) break;
+validationError = failureReason;
+input.onProgress?.({ type: "retry", attempt: calls, reason: failureReason });
 ```
 
 - [ ] **Step 6: Replace the ticker in `src/cli.ts`**
@@ -1233,12 +1246,12 @@ Delete the `started` / `ticker` block and the `finally` that clears it. Replace 
 Move the `readRepository` and `discoverContext` calls under their own phase reporting, above the loop:
 
 ```ts
-	const bootTerminal = createTerminal();
-	const boot = createSpinner(bootTerminal, profile.model);
-	boot.phase("reading staged changes");
-	const repository = await readRepository(process.cwd(), options.all, retainBudget);
-	boot.stop();
-	if (!repository.paths.length) throw new Error("No staged changes.");
+const bootTerminal = createTerminal();
+const boot = createSpinner(bootTerminal, profile.model);
+boot.phase("reading staged changes");
+const repository = await readRepository(process.cwd(), options.all, retainBudget);
+boot.stop();
+if (!repository.paths.length) throw new Error("No staged changes.");
 ```
 
 Keep the existing `if (!repository.paths.length) throw` after `boot.stop()`, so the spinner never outlives an error.
@@ -1281,10 +1294,12 @@ back to one plain line per phase when the region cannot be redrawn."
 ### Task 6: `src/textarea.ts`, the line model
 
 **Files:**
+
 - Create: `src/textarea.ts`
 - Test: `test/textarea.test.ts`
 
 **Interfaces:**
+
 - Consumes: nothing.
 - Produces:
   - `interface TextBuffer { lines: string[]; row: number }`
@@ -1444,10 +1459,12 @@ moves between them, which keeps it pure and testable with no terminal."
 ### Task 7: `src/review.ts`, the pure core
 
 **Files:**
+
 - Create: `src/review.ts` (the `reduce` and `render` half only; the prompt shell arrives in Task 8)
 - Test: `test/review.test.ts`
 
 **Interfaces:**
+
 - Consumes: `TextBuffer` and its operations from Task 6, `Terminal` and `paint` from Task 1, `ProposedCommit` and `CommitPlan` from `src/ai.ts`.
 - Produces:
   - `type ReviewMode = "list" | "subject" | "body"`
@@ -1737,20 +1754,29 @@ function reduceBody(state: ReviewState, key: ReviewKey, live: Live): [ReviewStat
 
 	if (key.name === "return") {
 		const next = splitLine(setLine(buffer, live.text), live.text, live.column);
-		return [{ ...state, buffer: next }, { type: "load", text: activeLine(next), column: 0 }];
+		return [
+			{ ...state, buffer: next },
+			{ type: "load", text: activeLine(next), column: 0 },
+		];
 	}
 
 	if (key.name === "backspace" && live.column === 0) {
 		const { buffer: next, column } = joinPrevious(setLine(buffer, live.text), live.text);
 		if (next === buffer) return [state, NONE];
-		return [{ ...state, buffer: next }, { type: "load", text: activeLine(next), column }];
+		return [
+			{ ...state, buffer: next },
+			{ type: "load", text: activeLine(next), column },
+		];
 	}
 
 	if (key.name === "up" || key.name === "down") {
 		const saved = setLine(buffer, live.text);
 		const next = moveRow(saved, key.name === "up" ? -1 : 1);
 		if (next === saved) return [{ ...state, buffer: saved }, NONE];
-		return [{ ...state, buffer: next }, { type: "load", text: activeLine(next), column: activeLine(next).length }];
+		return [
+			{ ...state, buffer: next },
+			{ type: "load", text: activeLine(next), column: activeLine(next).length },
+		];
 	}
 
 	// Any other key is readline's business: it edits the live line and render picks it up.
@@ -1790,7 +1816,10 @@ export function reduce(state: ReviewState, key: ReviewKey, live: Live): [ReviewS
 
 	if (key.name === "e") {
 		const subject = commitAt(state)?.subject ?? "";
-		return [{ ...state, mode: "subject", error: null }, { type: "load", text: subject, column: subject.length }];
+		return [
+			{ ...state, mode: "subject", error: null },
+			{ type: "load", text: subject, column: subject.length },
+		];
 	}
 
 	// Body actions live in the expanded view only, which is what keeps the collapsed list short.
@@ -1898,9 +1927,7 @@ export function render(state: ReviewState, live: Live, terminal: Terminal, width
 			tail = live.text.slice(live.column);
 		} else {
 			const badge =
-				!expanded && commit.body
-					? paint(terminal, "dim", `  ¶ ${commit.body.split("\n").length} lines`)
-					: "";
+				!expanded && commit.body ? paint(terminal, "dim", `  ¶ ${commit.body.split("\n").length} lines`) : "";
 			lines.push(`${marker} ${paintSubject(terminal, commit.subject)}${badge}`);
 		}
 
@@ -1965,6 +1992,7 @@ cancels the review when none is running."
 ### Task 8: the prompt shell and the CLI wiring
 
 **Files:**
+
 - Modify: `src/review.ts` (append the `@inquirer/core` shell)
 - Modify: `src/cli.ts` (drop `formatPlan` and `reviewPlan`, call the new prompt)
 - Modify: `scripts/demo.ts` (import the new prompt)
@@ -1972,6 +2000,7 @@ cancels the review when none is running."
 - Test: `test/cli.test.ts`
 
 **Interfaces:**
+
 - Consumes: everything from Task 7, plus `createTerminal` from Task 1.
 - Produces:
   - `function reviewCommits(config: { plan: CommitPlan; onGenerate?: (index: number, subject: string, signal: AbortSignal) => Promise<string> }): Promise<{ outcome: ReviewOutcome; commits: ProposedCommit[] }>`
@@ -2112,9 +2141,7 @@ export const reviewCommits = createPrompt<ReviewResult, ReviewConfig>((config, d
 			setState({ ...next, generating: effect.index, error: null });
 			void config
 				.onGenerate(effect.index, latest.current.commits[effect.index]?.subject ?? "", abort.signal)
-				.then((body) =>
-					setState({ ...withCommit(latest.current, effect.index, { body }), generating: null })
-				)
+				.then((body) => setState({ ...withCommit(latest.current, effect.index, { body }), generating: null }))
 				.catch((error: unknown) =>
 					setState({
 						...latest.current,
@@ -2138,11 +2165,11 @@ export const reviewCommits = createPrompt<ReviewResult, ReviewConfig>((config, d
 Delete `formatPlan`, `ReviewPrompts`, `reviewPrompts`, and `reviewPlan`, and drop the now-unused `editor` and `select` imports from `@inquirer/prompts`. Replace the review call at the end of `run()`:
 
 ```ts
-		const { outcome, commits } = await reviewCommits({ plan });
-		if (outcome === "regenerate") continue;
-		if (outcome === "cancel") return void process.stdout.write("Cancelled.\n");
-		await createCommits(repository.root, commits);
-		return;
+const { outcome, commits } = await reviewCommits({ plan });
+if (outcome === "regenerate") continue;
+if (outcome === "cancel") return void process.stdout.write("Cancelled.\n");
+await createCommits(repository.root, commits);
+return;
 ```
 
 - [ ] **Step 6: Wire it into `scripts/demo.ts`**
@@ -2170,6 +2197,7 @@ if (outcome !== "commit") {
 Run: `pnpm demo --offline`
 
 Walk the whole surface and confirm each one:
+
 - `↓` and `j` move; the marker turns cyan on the selected row.
 - `space` expands the second commit and shows its body; `space` again collapses it.
 - `↓` from an expanded row collapses it.
@@ -2212,12 +2240,14 @@ promoting it to a direct dependency downloads nothing new."
 ### Task 9: `generateCommitBody`, the `g` key, and `esc` to abort
 
 **Files:**
+
 - Modify: `src/ai.ts` (add `generateCommitBody`)
 - Modify: `src/cli.ts` (pass `onGenerate` into `reviewCommits`)
 - Modify: `scripts/demo.ts` (pass `onGenerate`, canned when offline)
 - Test: `test/ai.test.ts`
 
 **Interfaces:**
+
 - Consumes: `reviewCommits` from Task 8, `buildEvidence` from `src/evidence.ts`.
 - Produces:
   - `function generateCommitBody(input: { profile: Profile; subject: string; files: StagedFile[]; context: RepositoryContext; instructions?: string; signal?: AbortSignal }): Promise<string>`
@@ -2370,24 +2400,24 @@ ${evidence.block}`;
 - [ ] **Step 4: Wire it into `src/cli.ts`**
 
 ```ts
-		const byPath = new Map(repository.files.map((file) => [file.path, file]));
-		const { outcome, commits } = await reviewCommits({
-			plan,
-			// The subject comes from the list, not from `plan`, so a subject edited in place is the
-			// one the model is asked to write a body for.
-			onGenerate: (index, subject, signal) => {
-				const commit = plan.commits[index];
-				if (!commit) throw new Error("No such commit.");
-				return generateCommitBody({
-					profile,
-					subject,
-					files: commit.files.map((path) => byPath.get(path)).filter((file) => file !== undefined),
-					context,
-					signal,
-					...(options.instructions ? { instructions: options.instructions } : {}),
-				});
-			},
+const byPath = new Map(repository.files.map((file) => [file.path, file]));
+const { outcome, commits } = await reviewCommits({
+	plan,
+	// The subject comes from the list, not from `plan`, so a subject edited in place is the
+	// one the model is asked to write a body for.
+	onGenerate: (index, subject, signal) => {
+		const commit = plan.commits[index];
+		if (!commit) throw new Error("No such commit.");
+		return generateCommitBody({
+			profile,
+			subject,
+			files: commit.files.map((path) => byPath.get(path)).filter((file) => file !== undefined),
+			context,
+			signal,
+			...(options.instructions ? { instructions: options.instructions } : {}),
 		});
+	},
+});
 ```
 
 The `files` list still comes from `plan.commits[index]`, which is correct: the review list never changes which files belong to which commit, only the message.
@@ -2412,6 +2442,7 @@ The `files` list still comes from `plan.commits[index]`, which is correct: the r
 - [ ] **Step 6: Exercise it by hand**
 
 Run: `pnpm demo --offline`
+
 - Expand a row, press `g`. The row shows `writing body…` and the hint line reads `esc cancel generation`.
 - While it runs, `↓` still moves and `space` still toggles, but `e`, `i`, `x`, `r`, and `↵` do nothing.
 - Press `esc`. The row returns to its previous state with no error.
@@ -2419,6 +2450,7 @@ Run: `pnpm demo --offline`
 - Press `q` mid-generation. The review cancels.
 
 Run: `pnpm demo`
+
 - Press `g` on an expanded row and confirm a real body arrives from your provider, and that `esc` stops it.
 
 - [ ] **Step 7: Verify the checks**
@@ -2447,11 +2479,13 @@ the user asked for it. q still cancels the review from anywhere."
 ### Task 10: documentation and the changeset
 
 **Files:**
+
 - Modify: `README.md`
 - Modify: `CLAUDE.md`, `AGENTS.md`
 - Create: `.changeset/<generated-name>.md`
 
 **Interfaces:**
+
 - Consumes: everything.
 - Produces: nothing importable.
 
@@ -2464,24 +2498,24 @@ Replace the current **Review flow** section with:
 
 Before changing Git history, `gc` shows every proposed message and file group in an interactive list.
 
-| Key | Action |
-| --- | --- |
-| `↑` `↓` `j` `k` | Move the selection |
-| `space` | Expand the selected commit: full body and full file list |
-| `e` | Edit the subject in place |
-| `ctrl+e` | Open subject and body together in `$EDITOR` |
-| `r` | Regenerate the whole plan |
-| `↵` | Create the commits |
-| `q` | Cancel without committing |
+| Key             | Action                                                   |
+| --------------- | -------------------------------------------------------- |
+| `↑` `↓` `j` `k` | Move the selection                                       |
+| `space`         | Expand the selected commit: full body and full file list |
+| `e`             | Edit the subject in place                                |
+| `ctrl+e`        | Open subject and body together in `$EDITOR`              |
+| `r`             | Regenerate the whole plan                                |
+| `↵`             | Create the commits                                       |
+| `q`             | Cancel without committing                                |
 
 Body actions live in the expanded view, so the collapsed list stays short:
 
-| Key | Action |
-| --- | --- |
-| `i` | Edit the body in place, or write one when there is none |
-| `g` | Ask the model to write a body for this commit |
-| `x` | Drop the body |
-| `esc` | Stop a body the model is currently writing |
+| Key   | Action                                                  |
+| ----- | ------------------------------------------------------- |
+| `i`   | Edit the body in place, or write one when there is none |
+| `g`   | Ask the model to write a body for this commit           |
+| `x`   | Drop the body                                           |
+| `esc` | Stop a body the model is currently writing              |
 
 `esc` cancels the review when no body is being written.
 
@@ -2493,7 +2527,7 @@ split plan fails, earlier successful commits remain and all uncommitted patches 
 
 Add after the **Profiles and configuration** section:
 
-```markdown
+````markdown
 ### Commit bodies
 
 By default `gc` writes subjects only. Ask for a body on the commits that need one by expanding the row in the review
@@ -2501,18 +2535,20 @@ list and pressing `g`, or write it yourself with `i`.
 
 Set `body` in the user config, in `.gc.yaml`, or with `--body` to change the default:
 
-| Value | Behavior |
-| --- | --- |
-| `manual` | The default. No bodies are generated. |
-| `auto` | A body only where the subject alone cannot carry the change. |
-| `always` | Every commit gets a body. |
+| Value    | Behavior                                                     |
+| -------- | ------------------------------------------------------------ |
+| `manual` | The default. No bodies are generated.                        |
+| `auto`   | A body only where the subject alone cannot carry the change. |
+| `always` | Every commit gets a body.                                    |
 
 ```yaml
 # config.yaml
 body: auto
 ```
+````
 
 `gc --body always` overrides both files for one run.
+
 ```
 
 - [ ] **Step 3: Update the waiting description in `README.md`**
@@ -2520,17 +2556,21 @@ body: auto
 In **When the provider fails**, replace:
 
 ```
+
 While waiting, `gc` prints elapsed time to the terminal.
+
 ```
 
 with:
 
 ```
+
 While waiting, `gc` shows a spinner with the model, the current phase, and the elapsed time, and streams each commit
 subject as the model writes it. Retries print their reason above the spinner, so a halved budget or a refused schema is
 visible rather than silent. In a pipe or a log, and whenever `NO_COLOR` is set, this degrades to one plain line per
 phase with no escape sequences.
-```
+
+````
 
 - [ ] **Step 4: Update `CLAUDE.md` and `AGENTS.md`**
 
@@ -2538,7 +2578,7 @@ Add to the command list in both files, after `pnpm test`:
 
 ```markdown
 - `pnpm demo`: run the CLI against checked-in fixtures without creating commits. Add `--offline` to skip the network.
-```
+````
 
 Check whether `AGENTS.md` duplicates the command list before editing it; if it only refers to `CLAUDE.md`, leave it alone.
 

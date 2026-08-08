@@ -48,11 +48,11 @@ development loop:
 `src/cli.ts` is reduced to argument parsing and `run()` orchestration. `formatPlan` and `reviewPlan`
 move out and are replaced. Three new files:
 
-| File | Responsibility | Depends on | Approx. size |
-| --- | --- | --- | --- |
-| `src/terminal.ts` | Color helpers and the generation spinner. The only module that writes raw escape sequences during generation. | `node:util` | 110 lines |
-| `src/textarea.ts` | A pure text buffer: content, cursor position, and the key handlers that mutate them. No I/O, no ANSI. | none | 130 lines |
-| `src/review.ts` | The review list. A pure `reduce(state, key)` and `render(state, width)`, wrapped in a thin `@inquirer/core` prompt. | `src/textarea.ts`, `src/terminal.ts`, `@inquirer/core` | 320 lines |
+| File              | Responsibility                                                                                                      | Depends on                                             | Approx. size |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------ |
+| `src/terminal.ts` | Color helpers and the generation spinner. The only module that writes raw escape sequences during generation.       | `node:util`                                            | 110 lines    |
+| `src/textarea.ts` | A pure text buffer: content, cursor position, and the key handlers that mutate them. No I/O, no ANSI.               | none                                                   | 130 lines    |
+| `src/review.ts`   | The review list. A pure `reduce(state, key)` and `render(state, width)`, wrapped in a thin `@inquirer/core` prompt. | `src/textarea.ts`, `src/terminal.ts`, `@inquirer/core` | 320 lines    |
 
 The pure `reduce`/`render` split in `src/review.ts` is the central testability decision. Every
 interaction is a plain function call returning a plain value, so the entire list is testable with
@@ -76,13 +76,13 @@ raw-mode prompt would otherwise have to reimplement.
 
 ```ts
 export type PlanEvent =
-  | { type: "phase"; label: string }
-  | { type: "subject"; index: number; text: string }
-  | { type: "retry"; attempt: number; reason: string };
+	| { type: "phase"; label: string }
+	| { type: "subject"; index: number; text: string }
+	| { type: "retry"; attempt: number; reason: string };
 
 export interface GenerateCommitPlanInput {
-  // ...existing fields unchanged...
-  onProgress?: (event: PlanEvent) => void;
+	// ...existing fields unchanged...
+	onProgress?: (event: PlanEvent) => void;
 }
 ```
 
@@ -118,7 +118,7 @@ function stay, and each gets its own reader:
   growing buffer with a single regular expression:
 
   ```ts
-  /"subject"\s*:\s*"((?:[^"\\]|\\.)*)/g
+  /"subject"\s*:\s*"((?:[^"\\]|\\.)*)/g;
   ```
 
   The last match is deliberately allowed to be unterminated, which is exactly what a subject
@@ -217,19 +217,19 @@ only when a body exists, and `i` reads `write body` rather than `edit body` when
 Body actions are modal. They exist only while a row is expanded, which is what keeps the collapsed
 list short.
 
-| Key | Scope | Action |
-| --- | --- | --- |
-| `↑` `↓` `j` `k` | always | Move the selection. Moving collapses the expanded row. |
-| `space` | always | Toggle the expanded view on the selected row |
-| `e` | always | Edit the subject in place |
-| `ctrl+e` | always | Open subject and body together in `$EDITOR` |
-| `r` | always | Regenerate the whole plan |
-| `↵` | always | Accept the plan and commit |
-| `q` `esc` | always | Cancel without committing |
-| `i` | expanded | Edit the body in place. Opens empty when there is no body. |
-| `g` | expanded | Ask the model to write a body for this commit |
-| `x` | expanded | Drop the body. Shown only when a body exists. |
-| `esc` | generating | Cancel the running body generation. Takes priority over cancelling the review. |
+| Key             | Scope      | Action                                                                         |
+| --------------- | ---------- | ------------------------------------------------------------------------------ |
+| `↑` `↓` `j` `k` | always     | Move the selection. Moving collapses the expanded row.                         |
+| `space`         | always     | Toggle the expanded view on the selected row                                   |
+| `e`             | always     | Edit the subject in place                                                      |
+| `ctrl+e`        | always     | Open subject and body together in `$EDITOR`                                    |
+| `r`             | always     | Regenerate the whole plan                                                      |
+| `↵`             | always     | Accept the plan and commit                                                     |
+| `q` `esc`       | always     | Cancel without committing                                                      |
+| `i`             | expanded   | Edit the body in place. Opens empty when there is no body.                     |
+| `g`             | expanded   | Ask the model to write a body for this commit                                  |
+| `x`             | expanded   | Drop the body. Shown only when a body exists.                                  |
+| `esc`           | generating | Cancel the running body generation. Takes priority over cancelling the review. |
 
 `ctrl+c` cancels, as `@inquirer/core` already arranges.
 
@@ -282,12 +282,12 @@ A new export in `src/ai.ts`:
 
 ```ts
 export async function generateCommitBody(input: {
-  profile: Profile;
-  commit: ProposedCommit;
-  files: StagedFile[];        // only the files belonging to this commit
-  context: RepositoryContext;
-  instructions?: string;
-  signal?: AbortSignal;
+	profile: Profile;
+	commit: ProposedCommit;
+	files: StagedFile[]; // only the files belonging to this commit
+	context: RepositoryContext;
+	instructions?: string;
+	signal?: AbortSignal;
 }): Promise<string>;
 ```
 
@@ -325,11 +325,11 @@ export async function generateCommitBody(input: {
 
 A new key, `body`, with three values:
 
-| Value | Meaning | Prompt instruction |
-| --- | --- | --- |
-| `manual` | Default. No bodies are generated. | Leave every body empty. The user will request bodies where they are wanted. |
-| `auto` | A body only where it earns its place. | Write a body only when the subject cannot carry the change. Most commits need none. |
-| `always` | Every commit gets a body. | Every commit must have a body. |
+| Value    | Meaning                               | Prompt instruction                                                                  |
+| -------- | ------------------------------------- | ----------------------------------------------------------------------------------- |
+| `manual` | Default. No bodies are generated.     | Leave every body empty. The user will request bodies where they are wanted.         |
+| `auto`   | A body only where it earns its place. | Write a body only when the subject cannot carry the change. Most commits need none. |
+| `always` | Every commit gets a body.             | Every commit must have a body.                                                      |
 
 Resolution order, later winning: user config, then `.gc.yaml`, then `--body <mode>` on the command
 line. This mirrors how `split` already resolves through `mergeConfig`.
@@ -397,7 +397,10 @@ To consume them, `readRepository` is split:
 
 ```ts
 export function parseRepository(
-  diff: Buffer, names: Buffer, history: string[], retainBudgetBytes?: number
+	diff: Buffer,
+	names: Buffer,
+	history: string[],
+	retainBudgetBytes?: number
 ): RepositoryChanges;
 
 export async function readRepository(cwd, stageAll, retainBudgetBytes): Promise<RepositoryChanges>;
@@ -445,15 +448,15 @@ its `>=22.13.0` floor.
 
 All tests use `node:test`. No test makes a live provider call, per the repository instructions.
 
-| Module | What is tested |
-| --- | --- |
-| `src/textarea.ts` | Insert, backspace, delete, arrow, home, and end, as a pure state machine. Multi-byte characters are not split. |
-| `src/review.ts` | `reduce` key by key: navigation, expand and collapse, that `i`, `g`, and `x` are ignored while collapsed, that `x` is ignored with no body, that mutating keys are ignored while a body is generating, that `esc` aborts a running generation instead of cancelling the review, and that `esc` cancels the review once none is running. `render` output for the collapsed, expanded-with-body, expanded-without-body, and generating states at a fixed width. |
-| `src/terminal.ts` | `NO_COLOR` and a non-TTY `stderr` both produce plain text with no escape sequences. Frame selection advances. |
-| `src/ai.ts` | Subjects extracted from a fake partial stream, in both the schema and the plain-text readers. `manual` clears bodies in `validatePlan` and `validateGroupPlan`. `generateCommitBody` against a local server double. |
-| `src/config.ts` | `body` defaults to `manual` when absent, rejects an unknown value, is accepted in `.gc.yaml`, and is overridden rather than merged. |
-| `src/git.ts` | `parseRepository` against each fixture, including the rename pair and the reduced lockfile. |
-| `src/cli.ts` | `--body <mode>` parsing and its rejection of an unknown value. |
+| Module            | What is tested                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/textarea.ts` | Insert, backspace, delete, arrow, home, and end, as a pure state machine. Multi-byte characters are not split.                                                                                                                                                                                                                                                                                                                                                |
+| `src/review.ts`   | `reduce` key by key: navigation, expand and collapse, that `i`, `g`, and `x` are ignored while collapsed, that `x` is ignored with no body, that mutating keys are ignored while a body is generating, that `esc` aborts a running generation instead of cancelling the review, and that `esc` cancels the review once none is running. `render` output for the collapsed, expanded-with-body, expanded-without-body, and generating states at a fixed width. |
+| `src/terminal.ts` | `NO_COLOR` and a non-TTY `stderr` both produce plain text with no escape sequences. Frame selection advances.                                                                                                                                                                                                                                                                                                                                                 |
+| `src/ai.ts`       | Subjects extracted from a fake partial stream, in both the schema and the plain-text readers. `manual` clears bodies in `validatePlan` and `validateGroupPlan`. `generateCommitBody` against a local server double.                                                                                                                                                                                                                                           |
+| `src/config.ts`   | `body` defaults to `manual` when absent, rejects an unknown value, is accepted in `.gc.yaml`, and is overridden rather than merged.                                                                                                                                                                                                                                                                                                                           |
+| `src/git.ts`      | `parseRepository` against each fixture, including the rename pair and the reduced lockfile.                                                                                                                                                                                                                                                                                                                                                                   |
+| `src/cli.ts`      | `--body <mode>` parsing and its rejection of an unknown value.                                                                                                                                                                                                                                                                                                                                                                                                |
 
 The existing `test/cli.test.ts` case `edits one message then returns to the full review` is removed
 along with `formatPlan` and `reviewPlan`. Its coverage moves to the `src/review.ts` `reduce` tests.
