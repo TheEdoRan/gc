@@ -4,7 +4,16 @@ import { test } from "node:test";
 import { stripVTControlCharacters } from "node:util";
 
 import type { CommitPlan } from "../src/ai.ts";
-import { initialState, reduce, render, type ReviewKey, type ReviewState } from "../src/review.ts";
+import {
+	editorSeed,
+	initialState,
+	parseEditedMessage,
+	reduce,
+	render,
+	reviewCommits,
+	type ReviewKey,
+	type ReviewState,
+} from "../src/review.ts";
 import { createTerminal } from "../src/terminal.ts";
 
 const plan: CommitPlan = {
@@ -309,4 +318,141 @@ test("ctrl+e in the body editor banks what was typed", () => {
 	const [next, effect] = reduce(writing, key("e", true), { text: "typed but not saved", column: 19 });
 	assert.deepEqual(effect, { type: "editor", index: 1 });
 	assert.deepEqual(next.buffer, { lines: ["typed but not saved"], row: 0 }, "the external editor sees the live line");
+});
+
+test("the editor helpers keep the pure message rules out of the shell", () => {
+	assert.equal(editorSeed("feat: one", ""), "feat: one");
+	assert.equal(editorSeed("feat: one", "  \n "), "feat: one", "a blank body adds no separator");
+	assert.equal(editorSeed("feat: one", "why"), "feat: one\n\nwhy");
+
+	assert.equal(parseEditedMessage(""), null);
+	assert.equal(parseEditedMessage("   \n\nwhy"), null, "an empty subject is refused");
+	assert.deepEqual(parseEditedMessage("  feat: one  "), { subject: "feat: one", body: "" });
+	assert.deepEqual(parseEditedMessage("feat: one\r\n\r\nwhy\r\nand how\r\n"), {
+		subject: "feat: one",
+		body: "why\nand how",
+	});
+});
+
+/**
+ * The bytes a terminal sends for the keys the review binds. Escape alone is left out on purpose:
+ * readline only decodes it after its escape timeout, which would put half a second into any test
+ * that pressed it.
+ */
+const BYTES: Record<string, string> = {
+	up: "\u001b[A",
+	down: "\u001b[B",
+	left: "\u001b[D",
+	space: " ",
+	enter: "\r",
+	backspace: "\u007f",
+	ctrld: "\u0004",
+	ctrlu: "\u0015",
+};
+
+/** The move the screen manager writes last: an optional row climb, then an absolute column. */
+const CURSOR = /\u001b\[(?:(\d+)A)?\u001b\[(\d+)G$/;
+
+/**
+ * Drive the prompt through the same `input` and `output` context options a terminal would fill, and
+ * report each frame as the rows it drew plus the row and column it left the cursor on.
+ */
+function drive(source: CommitPlan) {
+	const input = new PassThrough();
+	const output = new PassThrough();
+	let drawn = "";
+	output.on("data", (data: Buffer) => {
+		drawn += data.toString();
+	});
+	const result = reviewCommits({ plan: source }, { input, output });
+
+	// One tick before the keys as well: the first frame is deferred so readline can drain whatever
+	// the stream had buffered before any handler was listening.
+	async function send(...keys: string[]) {
+		await new Promise((resolve) => setImmediate(resolve));
+		for (const name of keys) {
+			input.write(BYTES[name] ?? name);
+			await new Promise((resolve) => setImmediate(resolve));
+		}
+		const raw = drawn;
+		drawn = "";
+		const match = CURSOR.exec(raw);
+		const lines = stripVTControlCharacters(raw.replace(CURSOR, "")).replace(/^\n+/, "").split("\n");
+		return { lines, row: lines.length - 1 - Number(match?.[1] ?? 0), column: Number(match?.[2] ?? 1) - 1 };
+	}
+
+	return { result, send };
+}
+
+test("the prompt draws, navigates and edits a body against a synthetic terminal", { timeout: 5000 }, async () => {
+	const terminal = drive(plan);
+	const first = await terminal.send();
+	assert.match(first.lines.join("\n"), /^❯ feat\(cli\): add the list$/m, "the first row starts selected");
+
+	const moved = await terminal.send("down");
+	const movedText = moved.lines.join("\n");
+	assert.match(movedText, /^❯ fix\(git\): keep renames together {2}¶ 1 line$/m, "the marker moved, the badge shows");
+	assert.doesNotMatch(movedText, /^❯ feat\(cli\)/m);
+
+	const ignored = await terminal.send("i");
+	assert.deepEqual(ignored.lines, moved.lines, "i on a collapsed row draws the same frame");
+
+	const expanded = await terminal.send("space");
+	assert.match(expanded.lines.join("\n"), /^ {2}│ Because the pairing is lost\.$/m);
+
+	const box = await terminal.send("i");
+	assert.equal(box.lines[box.row], "  │ Because the pairing is lost.", "the caret sits on the body row itself");
+	assert.equal(box.column, "  │ Because the pairing is lost.".length, "at the end of what was drawn there");
+	assert.match(box.lines.join("\n"), /ctrl\+d save/, "the body box is open");
+
+	const typed = await terminal.send("left", "!");
+	assert.equal(typed.lines[typed.row], "  │ Because the pairing is lost!.", "typing inserts at the caret");
+	assert.equal(typed.column, "  │ Because the pairing is lost!".length, "which the caret then follows");
+
+	const saved = await terminal.send("ctrld");
+	assert.match(saved.lines.join("\n"), /space collapse/, "ctrl+d closes the box");
+
+	await terminal.send("enter");
+	const { outcome, commits } = await terminal.result;
+	assert.equal(outcome, "commit");
+	assert.equal(commits[1]?.body, "Because the pairing is lost!.");
+	assert.equal(plan.commits[1]?.body, "Because the pairing is lost.", "the caller's plan is untouched");
+});
+
+test("ctrl+d never reaches readline as end of input", { timeout: 5000 }, async () => {
+	// readline closes itself on ctrl+d with an empty line, and the review's line is empty on every
+	// list frame. An undefended prompt stops drawing here and its promise never settles.
+	const list = drive(plan);
+	await list.send();
+	await list.send("ctrld");
+	assert.match((await list.send("down")).lines.join("\n"), /^❯ fix\(git\)/m, "the list still answers keys");
+	await list.send("q");
+	assert.equal((await list.result).outcome, "cancel");
+
+	// The subject editor reaches the same empty line the moment ctrl+u clears it.
+	const subject = drive(plan);
+	await subject.send();
+	await subject.send("e", "ctrlu", "ctrld");
+	assert.match((await subject.send("enter")).lines.join("\n"), /↵ save/, "the subject editor survives it too");
+	await subject.send("feat: kept", "enter", "q");
+	assert.equal((await subject.result).outcome, "cancel");
+});
+
+test("an empty subject keeps the editor open", { timeout: 5000 }, async () => {
+	const terminal = drive(plan);
+	await terminal.send();
+
+	const rejected = await terminal.send("e", "ctrlu", "enter");
+	const text = rejected.lines.join("\n");
+	assert.match(text, /A commit subject cannot be empty\./);
+	assert.match(text, /↵ save · esc cancel/, "the editor is still open");
+	assert.equal(rejected.column, "❯ ".length, "with the caret on the emptied row");
+
+	const accepted = await terminal.send("feat: renamed", "enter");
+	assert.match(accepted.lines.join("\n"), /^❯ feat: renamed$/m);
+
+	await terminal.send("enter");
+	const { outcome, commits } = await terminal.result;
+	assert.equal(outcome, "commit");
+	assert.equal(commits[0]?.subject, "feat: renamed");
 });

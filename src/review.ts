@@ -203,6 +203,21 @@ export function reduce(state: ReviewState, key: ReviewKey, live: Live): [ReviewS
 	return [state, NONE];
 }
 
+/** The commit-message text the external editor is opened on. */
+export function editorSeed(subject: string, body: string): string {
+	return body.trim() ? `${subject}\n\n${body}` : subject;
+}
+
+/**
+ * Read back what the external editor wrote: the first line is the subject and the rest is the body.
+ * Null when the subject is empty, which is the one message Git will not take.
+ */
+export function parseEditedMessage(text: string): { subject: string; body: string } | null {
+	const [subject = "", ...rest] = text.replace(/\r\n/g, "\n").split("\n");
+	if (!subject.trim()) return null;
+	return { subject: subject.trim(), body: rest.join("\n").trim() };
+}
+
 const TYPE_STYLES: Record<string, "green" | "yellow" | "blue" | "magenta"> = {
 	feat: "green",
 	fix: "yellow",
@@ -389,19 +404,18 @@ export const reviewCommits = createPrompt<ReviewResult, ReviewConfig>((config, d
 		if (state.done) done({ outcome: state.done, commits: state.commits });
 	}, [state.done]);
 
-	// readline reads ctrl+d on an empty line as end of input and closes itself, which would freeze
-	// the prompt. The body box binds ctrl+d to save, so close is disarmed while that box is open.
-	// The teardown path is untouched: the hooks are cleaned up before the screen manager closes.
-	useEffect(
-		(rl) => {
-			const close = rl.close.bind(rl);
-			if (state.mode === "body") rl.close = () => {};
-			return () => {
-				rl.close = close;
-			};
-		},
-		[state.mode]
-	);
+	// readline reads ctrl+d on an empty line as end of input and closes itself, which freezes the
+	// prompt: no further frame is drawn and the promise never settles. The line is empty on every
+	// list frame and can be emptied in either editor, so close is disarmed for the whole prompt
+	// rather than for one mode. The teardown path is untouched, because @inquirer/core clears the
+	// hooks, and so runs this cleanup, before the screen manager closes the interface for real.
+	useEffect((rl) => {
+		const close = rl.close.bind(rl);
+		rl.close = () => {};
+		return () => {
+			rl.close = close;
+		};
+	}, []);
 
 	useKeypress((key, readline) => {
 		const rl = readline as unknown as RawReadline;
@@ -423,30 +437,25 @@ export const reviewCommits = createPrompt<ReviewResult, ReviewConfig>((config, d
 			const commit = next.commits[effect.index];
 			// The buffer, not the commit, holds the body while the box is open: reduce banked the
 			// live line into it before asking for the editor.
-			const body = next.mode === "body" && next.buffer ? toText(next.buffer) : (commit?.body ?? "");
-			const message = commit ? (body.trim() ? `${commit.subject}\n\n${body}` : commit.subject) : "";
+			const body = next.buffer ? toText(next.buffer) : (commit?.body ?? "");
 			// readline has to let go of the terminal while the child owns it. External-editor
-			// restores raw mode on exit, and the list stays on screen behind it.
+			// restores raw mode on exit, and the box stays open behind it: it closes on success
+			// only, so a child that never starts does not take what was typed with it.
 			rl.pause();
-			void editAsync(message, { postfix: ".txt" })
+			void editAsync(commit ? editorSeed(commit.subject, body) : "", { postfix: ".txt" })
 				.then(
 					(edited) => {
-						const [subject = "", ...rest] = edited.replace(/\r\n/g, "\n").split("\n");
-						if (!subject.trim()) {
+						const message = parseEditedMessage(edited);
+						if (!message) {
 							setState({ ...latest.current, error: "A commit subject cannot be empty." });
 							return;
 						}
-						setState(
-							withCommit(latest.current, effect.index, {
-								subject: subject.trim(),
-								body: rest.join("\n").trim(),
-							})
-						);
+						setLive(sync(rl, EMPTY_LIVE));
+						setState({ ...withCommit(latest.current, effect.index, message), mode: "list", buffer: null });
 					},
 					(error: unknown) => setState({ ...latest.current, error: `Editor failed: ${String(error)}` })
 				)
 				.finally(() => rl.resume());
-			final = { ...next, mode: "list", buffer: null };
 		}
 
 		if (effect.type === "generate") {
