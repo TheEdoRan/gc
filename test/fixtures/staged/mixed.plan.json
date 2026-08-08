@@ -1,0 +1,19 @@
+{
+	"commits": [
+		{
+			"subject": "feat(api): version the client, routes and error surface",
+			"body": "",
+			"files": ["src/api/client.ts", "src/api/errors.ts", "src/api/routes.ts"]
+		},
+		{
+			"subject": "feat(ui): version the list, theme and input modules",
+			"body": "The three modules share a version constant, so they move together or\nthe theme resolves against a list that no longer matches it.",
+			"files": ["src/ui/input.ts", "src/ui/list.ts", "src/ui/theme.ts"]
+		},
+		{
+			"subject": "docs: refresh the guide and readme",
+			"body": "",
+			"files": ["README.md", "docs/guide.md", "pnpm-lock.yaml"]
+		}
+	]
+}

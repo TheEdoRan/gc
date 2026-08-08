@@ -1,0 +1,9 @@
+{
+	"commits": [
+		{
+			"subject": "feat: greet the user by name",
+			"body": "",
+			"files": ["src/greet.ts"]
+		}
+	]
+}

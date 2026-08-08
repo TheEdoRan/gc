@@ -20,5 +20,5 @@
 		"noUnusedLocals": true,
 		"noUnusedParameters": true
 	},
-	"include": ["src/**/*.ts", "test/**/*.ts", "tsdown.config.ts"]
+	"include": ["src/**/*.ts", "test/**/*.ts", "scripts/**/*.ts", "tsdown.config.ts"]
 }

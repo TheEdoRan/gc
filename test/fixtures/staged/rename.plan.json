@@ -1,0 +1,9 @@
+{
+	"commits": [
+		{
+			"subject": "refactor: rename greet to hello",
+			"body": "",
+			"files": ["src/greet.ts", "src/hello.ts"]
+		}
+	]
+}

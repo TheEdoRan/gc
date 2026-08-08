@@ -14,6 +14,11 @@ export interface ProposedCommit {
 	files: string[];
 }
 
+export type PlanEvent =
+	| { type: "phase"; label: string }
+	| { type: "subject"; index: number; text: string }
+	| { type: "retry"; attempt: number; reason: string };
+
 export interface CommitPlan {
 	commits: ProposedCommit[];
 	/** One line describing what the model was shown, rendered above the plan preview. */
@@ -381,7 +386,8 @@ export async function generateCommitPlan(input: {
 	instructions?: string;
 	exclude?: string[];
 	include?: string[];
-	generate?: (prompt: string, structured: boolean) => Promise<unknown>;
+	generate?: (prompt: string, structured: boolean, onProgress?: (event: PlanEvent) => void) => Promise<unknown>;
+	onProgress?: (event: PlanEvent) => void;
 }): Promise<CommitPlan> {
 	const deadline = Date.now() + TOTAL_DEADLINE_MS;
 	let budgetTokens = input.profile.maxInputTokens ?? DEFAULT_MAX_INPUT_TOKENS;
@@ -449,7 +455,7 @@ export async function generateCommitPlan(input: {
 		calls++;
 		let output: unknown;
 		try {
-			output = await generate(prompt, structured);
+			output = await generate(prompt, structured, input.onProgress);
 		} catch (error) {
 			const kind = classifyFailure(error);
 			failureReason = clampFeedback(error instanceof Error ? error.message : String(error));
