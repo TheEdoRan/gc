@@ -21,6 +21,14 @@ pnpm build
 
 Tests use `node:test`, temporary Git repositories, and local HTTP servers. Do not make live provider calls in tests.
 
+Try the review flow by hand against checked-in fixtures, without a provider and without creating a commit:
+
+```sh
+pnpm demo --offline
+```
+
+Drop `--offline` to use your own configured profile instead of the canned plan.
+
 ## Pull requests
 
 Keep changes focused and add a Changeset for changes that affect the published package:

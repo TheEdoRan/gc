@@ -8,6 +8,7 @@
 - `pnpm lint`: run type-aware lint rules.
 - `pnpm typecheck`: run the TypeScript compiler without emitting files.
 - `pnpm test`: run the native Node.js test suite.
+- `pnpm demo`: run the CLI against checked-in fixtures without creating commits. Add `--offline` to skip the network.
 - `pnpm build`: build `dist/index.mjs`.
 - `pnpm check`: run all required checks.
 

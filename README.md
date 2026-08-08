@@ -5,7 +5,7 @@ approve the complete plan.
 
 ## Requirements
 
-- Node.js 26 or newer
+- Node.js 22.13.0 or newer
 - Git
 - An OpenAI, Anthropic, or OpenAI-compatible API
 
@@ -16,14 +16,14 @@ npm install --global @theedoran/gc
 gc init
 ```
 
-`gc init` creates or updates a profile, activates it, and asks whether commit splitting should be enabled by default.
-Setup includes provider, base URL, API key, and model selection. If the provider cannot list its models, you can enter a
-model name manually.
+`gc init` creates or updates a profile, activates it, asks how commit bodies should be generated, and asks whether
+commit splitting should be enabled by default. Setup includes provider, base URL, API key, and model selection. If the
+provider cannot list its models, you can enter a model name manually.
 
 ## Usage
 
 ```text
-gc [-a|--all] [-i|--instructions <text>] [--split|--no-split]
+gc [-a|--all] [-i|--instructions <text>] [--split|--no-split] [--body <mode>]
 gc init
 gc profile [name]
 gc --help
@@ -44,12 +44,28 @@ together, and partially staged files keep their unstaged hunks.
 
 ## Review flow
 
-Before changing Git history, `gc` shows every proposed message and file group. You can:
+Before changing Git history, `gc` shows every proposed message and file group in an interactive list.
 
-- approve and commit the plan;
-- edit one message in your system editor, then return to the full preview;
-- regenerate the complete plan; or
-- cancel without creating a commit.
+| Key             | Action                                                   |
+| --------------- | -------------------------------------------------------- |
+| `↑` `↓` `j` `k` | Move the selection                                       |
+| `space`         | Expand the selected commit: full body and full file list |
+| `e`             | Edit the subject in place                                |
+| `ctrl+e`        | Open subject and body together in `$VISUAL` or `$EDITOR` |
+| `r`             | Regenerate the whole plan                                |
+| `↵`             | Create the commits                                       |
+| `q`             | Cancel without committing                                |
+
+Body actions live in the expanded view, so the collapsed list stays short:
+
+| Key   | Action                                                  |
+| ----- | ------------------------------------------------------- |
+| `i`   | Edit the body in place, or write one when there is none |
+| `g`   | Ask the model to write a body for this commit           |
+| `x`   | Drop the body                                           |
+| `esc` | Stop a body the model is currently writing              |
+
+`esc` cancels the review when no body is being written.
 
 Every commit uses normal `git commit`, so existing hooks and signing configuration still apply. If a later commit in a
 split plan fails, earlier successful commits remain and all uncommitted patches are restored to the index.
@@ -65,6 +81,27 @@ Configuration is stored in `config.yaml` under the native per-user configuration
 
 API keys are stored as plaintext in that protected file and are never printed by `gc`. Compatible profiles may omit the
 key when their endpoint does not require authentication.
+
+### Commit bodies
+
+By default `gc` writes subjects only. Ask for a body on the commits that need one by expanding the row in the review
+list and pressing `g`, or write it yourself with `i`.
+
+Set `body` in the user config, in `.gc.yaml`, or with `--body` to change the default:
+
+| Value    | Behavior                                                     |
+| -------- | ------------------------------------------------------------ |
+| `manual` | The default. No bodies are generated.                        |
+| `auto`   | A body only where the subject alone cannot carry the change. |
+| `always` | Every commit gets a body.                                    |
+
+```yaml
+# config.yaml
+body: auto
+```
+
+Each setting overrides the one before it: the user config is the base, `.gc.yaml` overrides it per repository, and
+`gc --body always` overrides both for one run.
 
 ## Repository context
 
@@ -118,7 +155,12 @@ one, and drops to plain JSON for the rest of the run if the endpoint refuses.
 Each failure is answered with the change that addresses it: an oversized prompt halves the input budget, a refused output
 ceiling halves the output budget, an answer in the wrong shape is sent back with the specific problem, and a timeout or a
 rate limit is simply retried. One request may take up to 120 seconds and the whole plan up to 180 seconds, since a
-reasoning model can think for a minute before writing anything. While waiting, `gc` prints elapsed time to the terminal.
+reasoning model can think for a minute before writing anything. While waiting, `gc` shows a spinner with the model, the
+current phase, and the elapsed time, and streams each commit subject as the model writes it. Retries print their reason
+above the spinner, so a halved budget or a refused schema stays visible instead of silent. When the output is not a
+terminal, for example piped or redirected to a file, `gc` cannot redraw in place, so it prints one plain line per phase
+and one per retry instead, with no streamed subjects. Setting `NO_COLOR` removes color from the spinner and its lines but,
+on a real terminal, does not turn off the live redraw by itself.
 
 An unusable API key or model name stops with that error rather than hiding it, since retrying cannot fix it.
 
