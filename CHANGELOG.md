@@ -1,5 +1,37 @@
 # @theedoran/gc
 
+## 0.3.0
+
+### Minor Changes
+
+- 1174010: Rework the review experience. Generation now shows a spinner with the model, the current phase and
+  the elapsed time, streams each commit subject as it is written, and prints the reason for every
+  retry. The plan preview is replaced by an interactive list that navigates, colours by Conventional
+  Commit type, edits subjects and bodies in place, and expands one commit at a time.
+
+  Commit bodies are now opt-in. The new `body` setting takes `manual` (the default, no bodies),
+  `auto`, or `always`, and is read from the user config, `.gc.yaml`, or `--body`. Ask for a body on a
+  single commit by expanding its row and pressing `g`, or write one yourself with `b`.
+
+  Existing configuration files keep working unchanged and default to `manual`.
+
+### Patch Changes
+
+- 074051e: Bring commit bodies forward in the review list. A collapsed row now previews the first three lines
+  of its body, marked with an ellipsis when there is more, instead of a line-count badge, so the list
+  says what each commit explains without being expanded.
+
+  The body editor opens with `b` from any row, collapsed or not, and expands that row on the way in.
+  It replaces `i`, which only worked on an already expanded row. `g` and `x` still live in the
+  expanded view.
+
+  Leaving the body editor now saves. `esc` writes the body back to the commit and closes the box, and
+  `ctrl+d` is no longer bound, so it deletes forward as readline does everywhere else. An unwanted
+  line is deleted by hand rather than thrown away with a key.
+
+  A lone `esc` is also read faster: readline waits half a second to tell it from an arrow key, which
+  is now shortened to 50ms.
+
 ## 0.2.1
 
 ### Patch Changes
