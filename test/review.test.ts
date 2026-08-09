@@ -56,19 +56,25 @@ test("navigation moves and collapses", () => {
 	assert.equal(press(start, "space", "space").expanded, null, "space toggles");
 });
 
-test("body keys do nothing while the row is collapsed", () => {
+test("g and x do nothing while the row is collapsed", () => {
 	const start = initialState(plan);
-	assert.equal(press(start, "i").mode, "list");
 	// Row 1 is the one with a body, so this fails loudly if a collapsed x ever fires.
 	assert.equal(press(start, "down", "x").commits[1]?.body, "Because the pairing is lost.");
 	assert.deepEqual(reduce(start, key("g"), idle)[1], { type: "none" });
+});
+
+test("b opens the body box from a collapsed row, expanding it", () => {
+	const [editing, effect] = reduce(press(initialState(plan), "down"), key("b"), idle);
+	assert.equal(editing.mode, "body");
+	assert.equal(editing.expanded, 1, "the row is expanded on the way in");
+	assert.deepEqual(effect, { type: "load", text: "Because the pairing is lost.", column: 28 });
 });
 
 test("body keys work once the row is expanded", () => {
 	const expanded = press(initialState(plan), "down", "space");
 	assert.equal(expanded.expanded, 1);
 
-	const [editing, effect] = reduce(expanded, key("i"), idle);
+	const [editing, effect] = reduce(expanded, key("b"), idle);
 	assert.equal(editing.mode, "body");
 	assert.deepEqual(effect, { type: "load", text: "Because the pairing is lost.", column: 28 });
 
@@ -103,7 +109,7 @@ test("the subject editor saves on enter and refuses an empty subject", () => {
 
 test("the body editor splits and joins lines", () => {
 	const expanded = press(initialState(plan), "down", "space");
-	const [editing] = reduce(expanded, key("i"), idle);
+	const [editing] = reduce(expanded, key("b"), idle);
 
 	const [split] = reduce(editing, key("return"), { text: "one two", column: 3 });
 	assert.deepEqual(split.buffer, { lines: ["one", " two"], row: 1 });
@@ -111,7 +117,10 @@ test("the body editor splits and joins lines", () => {
 	const [joined] = reduce(split, key("backspace"), { text: " two", column: 0 });
 	assert.deepEqual(joined.buffer, { lines: ["one two"], row: 0 });
 
-	const [done] = reduce(split, key("d", true), { text: " two", column: 4 });
+	const [typed] = reduce(split, key("d", true), { text: " two", column: 4 });
+	assert.equal(typed.mode, "body", "ctrl+d is readline's, not a save");
+
+	const [done] = reduce(split, key("escape"), { text: " two", column: 4 });
 	assert.equal(done.mode, "list");
 	assert.equal(done.commits[1]?.body, "one\n two");
 });
@@ -128,7 +137,7 @@ test("escape aborts a running generation before it cancels the review", () => {
 
 test("mutating keys are ignored while a body is generating, navigation is not", () => {
 	const generating: ReviewState = { ...initialState(plan), generating: 0 };
-	for (const name of ["e", "i", "g", "x", "r", "return"]) {
+	for (const name of ["e", "b", "g", "x", "r", "return"]) {
 		assert.equal(press(generating, name).done, null, `${name} must not finish the review`);
 		assert.equal(press(generating, name).mode, "list", `${name} must not open an editor`);
 	}
@@ -151,10 +160,10 @@ test("render shows the collapsed list, then the body, then the empty-body notice
 	const [collapsed] = render(start, idle, plain, 80);
 	assert.match(collapsed, /feat\(cli\): add the list/);
 	assert.match(collapsed, /src\/cli\.ts/);
-	assert.doesNotMatch(collapsed, /Because the pairing is lost/, "a collapsed body stays hidden");
+	assert.match(collapsed, /^ {2}│ Because the pairing is lost\.$/m, "a collapsed body is previewed");
 	assert.match(collapsed, /2 commits/);
 	assert.match(collapsed, /2 files shown in full/);
-	assert.match(collapsed, /¶ 1 line$/m, "a one-line body badge does not read '1 lines'");
+	assert.doesNotMatch(collapsed, /No body for this commit/, "but a row without one says nothing");
 	assert.doesNotMatch(collapsed, /\u001b/, "no colour without a TTY");
 
 	const [withBody] = render(press(start, "down", "space"), idle, plain, 80);
@@ -164,13 +173,26 @@ test("render shows the collapsed list, then the body, then the empty-body notice
 	assert.match(noBody, /No body for this commit/);
 });
 
+test("a collapsed body is cut to three lines and marked", () => {
+	const long = initialState({
+		commits: [{ subject: "feat: long", body: "one\ntwo\nthree\nfour\nfive", files: ["a.ts"] }],
+	});
+	const [collapsed] = render(long, idle, plain, 80);
+	assert.match(collapsed, /^ {2}│ one\n {2}│ two\n {2}│ three …$/m, "three lines, the last one marked");
+	assert.doesNotMatch(collapsed, /four/);
+
+	const [expanded] = render({ ...long, expanded: 0 }, idle, plain, 80);
+	assert.match(expanded, /^ {2}│ five$/m, "expanding shows the rest, unmarked");
+	assert.doesNotMatch(expanded, /…/);
+});
+
 test("the hint line is contextual", () => {
 	const start = initialState(plan);
-	assert.match(render(start, idle, plain, 80)[1], /space expand/);
-	assert.match(render(press(start, "space"), idle, plain, 80)[1], /i write body/);
+	assert.match(render(start, idle, plain, 80)[1], /space expand · e subject · b write body/);
+	assert.match(render(press(start, "space"), idle, plain, 80)[1], /b write body/);
 	assert.doesNotMatch(render(press(start, "space"), idle, plain, 80)[1], /x drop body/);
 	assert.match(render(press(start, "down", "space"), idle, plain, 80)[1], /x drop body/);
-	assert.match(render(press(start, "down", "space"), idle, plain, 80)[1], /i edit body/);
+	assert.match(render(press(start, "down", "space"), idle, plain, 80)[1], /b edit body/);
 
 	const generating: ReviewState = { ...initialState(plan), generating: 0 };
 	assert.match(render(generating, idle, plain, 80)[1], /esc cancel generation/);
@@ -196,7 +218,7 @@ test("navigation never leaves the array on an empty plan", () => {
 test("body actions stay locked while another row is generating", () => {
 	const expanded = press(initialState(plan), "down", "space");
 	const generating: ReviewState = { ...expanded, generating: 0 };
-	for (const name of ["i", "g", "x"]) {
+	for (const name of ["b", "g", "x"]) {
 		const [next, effect] = reduce(generating, key(name), idle);
 		assert.equal(next, generating, `${name} leaves the state untouched`);
 		assert.deepEqual(effect, { type: "none" });
@@ -212,7 +234,7 @@ test("an open editor keeps the keys the list would otherwise claim", () => {
 		assert.deepEqual(effect, { type: "none" });
 	}
 
-	const [writing] = reduce(press(initialState(plan), "down", "space"), key("i"), idle);
+	const [writing] = reduce(press(initialState(plan), "down", "space"), key("b"), idle);
 	const [next, effect] = reduce(writing, key("q"), { text: "unsaved words", column: 13 });
 	assert.equal(next, writing, "q types a letter instead of cancelling the review");
 	assert.deepEqual(effect, { type: "none" });
@@ -220,7 +242,7 @@ test("an open editor keeps the keys the list would otherwise claim", () => {
 });
 
 test("backspace at the very start of the body does nothing", () => {
-	const [writing] = reduce(press(initialState(plan), "down", "space"), key("i"), idle);
+	const [writing] = reduce(press(initialState(plan), "down", "space"), key("b"), idle);
 	const [next, effect] = reduce(writing, key("backspace"), { text: "Because the pairing is lost.", column: 0 });
 	assert.deepEqual(effect, { type: "none" }, "no line join, so readline must not be reloaded");
 	assert.deepEqual(next.buffer, { lines: ["Because the pairing is lost."], row: 0 });
@@ -273,7 +295,7 @@ test("content ends on the edited subject line, whole and prefixed", () => {
 });
 
 test("content ends on the edited body line, with the rest of the buffer below it", () => {
-	const [editing] = reduce(press(initialState(plan), "down", "space"), key("i"), idle);
+	const [editing] = reduce(press(initialState(plan), "down", "space"), key("b"), idle);
 	const [split] = reduce(editing, key("return"), { text: "first second", column: 5 });
 	const text = " second";
 
@@ -284,7 +306,7 @@ test("content ends on the edited body line, with the rest of the buffer below it
 		assert.equal(promptOf(content, text), "  │ ", `${where}: inquirer recovers the row prefix`);
 		assert.match(content, /│ first/, `${where}: the rows above the cursor stay in the content`);
 		assert.match(bottom, /src\/git\.ts/, `${where}: the file line moved down`);
-		assert.match(bottom, /ctrl\+d save/, `${where}: the hint stays last`);
+		assert.match(bottom, /esc save/, `${where}: the hint stays last`);
 	}
 
 	const [back] = reduce(split, key("up"), { text, column: 0 });
@@ -305,17 +327,18 @@ test("the fallback banner names the reason once", () => {
 	assert.match(render(silent, idle, plain, 80)[0], /^! local fallback: the provider did not return a plan$/m);
 });
 
-test("escape in the body editor throws the edit away", () => {
-	const [writing] = reduce(press(initialState(plan), "down", "space"), key("i"), idle);
-	const [cancelled, effect] = reduce(writing, key("escape"), { text: "half a thought", column: 14 });
-	assert.equal(cancelled.mode, "list");
-	assert.equal(cancelled.buffer, null);
-	assert.equal(cancelled.commits[1]?.body, "Because the pairing is lost.", "the commit keeps its old body");
+test("escape in the body editor saves what was typed", () => {
+	const [writing] = reduce(press(initialState(plan), "down", "space"), key("b"), idle);
+	const [saved, effect] = reduce(writing, key("escape"), { text: "half a thought", column: 14 });
+	assert.equal(saved.mode, "list");
+	assert.equal(saved.buffer, null);
+	assert.equal(saved.expanded, 1, "the row stays expanded");
+	assert.equal(saved.commits[1]?.body, "half a thought");
 	assert.deepEqual(effect, { type: "none" });
 });
 
 test("ctrl+e in the body editor banks what was typed", () => {
-	const [writing] = reduce(press(initialState(plan), "down", "space"), key("i"), idle);
+	const [writing] = reduce(press(initialState(plan), "down", "space"), key("b"), idle);
 	const [next, effect] = reduce(writing, key("e", true), { text: "typed but not saved", column: 19 });
 	assert.deepEqual(effect, { type: "editor", index: 1 });
 	assert.deepEqual(next.buffer, { lines: ["typed but not saved"], row: 0 }, "the external editor sees the live line");
@@ -405,26 +428,22 @@ test("the prompt draws, navigates and edits a body against a synthetic terminal"
 
 	const moved = await terminal.send("down");
 	const movedText = moved.lines.join("\n");
-	assert.match(movedText, /^❯ fix\(git\): keep renames together {2}¶ 1 line$/m, "the marker moved, the badge shows");
+	assert.match(movedText, /^❯ fix\(git\): keep renames together$/m, "the marker moved");
+	assert.match(movedText, /^ {2}│ Because the pairing is lost\.$/m, "a collapsed row previews its body");
 	assert.doesNotMatch(movedText, /^❯ feat\(cli\)/m);
 
-	const ignored = await terminal.send("i");
-	assert.deepEqual(ignored.lines, moved.lines, "i on a collapsed row draws the same frame");
-
-	const expanded = await terminal.send("space");
-	assert.match(expanded.lines.join("\n"), /^ {2}│ Because the pairing is lost\.$/m);
-
-	const box = await terminal.send("i");
+	const box = await terminal.send("b");
 	assert.equal(box.lines[box.row], "  │ Because the pairing is lost.", "the caret sits on the body row itself");
 	assert.equal(box.column, "  │ Because the pairing is lost.".length, "at the end of what was drawn there");
-	assert.match(box.lines.join("\n"), /ctrl\+d save/, "the body box is open");
+	assert.match(box.lines.join("\n"), /esc save/, "b opened the box from the collapsed row");
 
 	const typed = await terminal.send("left", "!");
 	assert.equal(typed.lines[typed.row], "  │ Because the pairing is lost!.", "typing inserts at the caret");
 	assert.equal(typed.column, "  │ Because the pairing is lost!".length, "which the caret then follows");
 
-	const saved = await terminal.send("ctrld");
-	assert.match(saved.lines.join("\n"), /space collapse/, "ctrl+d closes the box");
+	await terminal.send("escape");
+	const saved = await terminal.wait(700);
+	assert.match(saved.lines.join("\n"), /space collapse/, "esc closes the box on an expanded row");
 
 	await terminal.send("enter");
 	const { outcome, commits } = await terminal.result;
@@ -505,13 +524,13 @@ test(
 
 		// Navigation stays live while the request is out, and collapses row 0 on the way.
 		const moved = await terminal.send("down");
-		assert.match(moved.lines.join("\n"), /^❯ fix\(git\): keep renames together {2}¶ 1 line$/m, "↓ still moves");
+		assert.match(moved.lines.join("\n"), /^❯ fix\(git\): keep renames together$/m, "↓ still moves");
 		assert.match(moved.lines.join("\n"), /writing body…/, "row 0 keeps its marker after the selection left it");
 
 		const expanded = await terminal.send("space");
 		assert.match(expanded.lines.join("\n"), /^ {2}│ Because the pairing is lost\.$/m, "space still expands");
 
-		for (const name of ["e", "i", "x", "r", "enter"]) {
+		for (const name of ["e", "b", "x", "r", "enter"]) {
 			assert.deepEqual((await terminal.send(name)).lines, expanded.lines, `${name} changes nothing mid-generation`);
 		}
 
@@ -520,7 +539,7 @@ test(
 		const abortedText = aborted.lines.join("\n");
 		assert.doesNotMatch(abortedText, /writing body…/, "the marker is gone");
 		assert.doesNotMatch(abortedText, /Could not write a body/, "an abort the user asked for reports nothing");
-		assert.doesNotMatch(abortedText, /¶/, "and row 0 was left without a body");
+		assert.match(abortedText, /^ {2}feat\(cli\): edited here\n {4}src\/cli\.ts/m, "row 0 was left without a body");
 		assert.match(abortedText, /^❯ fix\(git\): keep renames together$/m, "the selection stayed where it moved to");
 		assert.match(abortedText, /^ {2}│ Because the pairing is lost\.$/m, "so did the expansion");
 		assert.match(abortedText, /x drop body/, "and the hint is the expanded-row one again");
@@ -533,7 +552,11 @@ test(
 		const written = await terminal.wait(20);
 		const writtenText = written.lines.join("\n");
 		assert.match(writtenText, /^❯ feat\(cli\): edited here$/m, "the move made during the request survived the write");
-		assert.match(writtenText, /^ {2}fix\(git\): keep renames together {2}¶ 1 line$/m, "the body landed on its own row");
+		assert.match(
+			writtenText,
+			/^ {2}fix\(git\): keep renames together\n {2}│ A body the model wrote\.$/m,
+			"the body landed on its own row"
+		);
 		assert.doesNotMatch(writtenText, /writing body…/);
 
 		// A generator that refuses says so on the row and leaves the body that was already there.

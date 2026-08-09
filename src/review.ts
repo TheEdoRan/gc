@@ -94,9 +94,8 @@ function reduceBody(state: ReviewState, key: ReviewKey, live: Live): [ReviewStat
 	const buffer = state.buffer;
 	if (!buffer) return [{ ...state, mode: "list" }, NONE];
 
-	if (key.name === "escape") return [{ ...state, mode: "list", buffer: null, error: null }, NONE];
-
-	if (key.ctrl && key.name === "d") {
+	// Leaving the box saves. Nothing here throws an edit away, so an unwanted line is deleted by hand.
+	if (key.name === "escape") {
 		const text = toText(setLine(buffer, live.text)).trim();
 		return [{ ...withCommit(state, state.index, { body: text }), mode: "list", buffer: null }, NONE];
 	}
@@ -181,17 +180,17 @@ export function reduce(state: ReviewState, key: ReviewKey, live: Live): [ReviewS
 		];
 	}
 
-	// Body actions live in the expanded view only, which is what keeps the collapsed list short.
-	if (state.expanded !== state.index) return [state, NONE];
-
-	if (key.name === "i") {
-		const body = commitAt(state)?.body ?? "";
-		const buffer = fromText(body);
+	// b opens the box from anywhere, expanding the row on the way, so the body is one key away.
+	if (key.name === "b") {
+		const buffer = fromText(commitAt(state)?.body ?? "");
 		return [
-			{ ...state, mode: "body", buffer, error: null },
+			{ ...state, mode: "body", expanded: state.index, buffer, error: null },
 			{ type: "load", text: activeLine(buffer), column: activeLine(buffer).length },
 		];
 	}
+
+	// The rest of the body actions live in the expanded view only, which keeps the collapsed list short.
+	if (state.expanded !== state.index) return [state, NONE];
 
 	if (key.name === "g") return [state, { type: "generate", index: state.index }];
 
@@ -225,6 +224,7 @@ const TYPE_STYLES: Record<string, "green" | "yellow" | "blue" | "magenta"> = {
 };
 const CONVENTIONAL = /^([a-z]+)(\([^)]*\))?(!?:\s)(.*)$/;
 const COLLAPSED_FILES = 3;
+const COLLAPSED_BODY = 3;
 
 /** Colour the Conventional Commit type. A subject in any other shape is left alone. */
 function paintSubject(terminal: Terminal, subject: string): string {
@@ -256,13 +256,14 @@ function wrap(text: string, width: number): string[] {
 function hint(state: ReviewState): string {
 	if (state.generating !== null) return "↑↓ move · space expand · esc cancel generation · q cancel";
 	if (state.mode === "subject") return "↵ save · esc cancel";
-	if (state.mode === "body") return "↵ newline · ctrl+d save · ctrl+e editor · esc cancel";
-	if (state.expanded !== state.index) {
-		return "↑↓ move · space expand · e subject · ctrl+e editor · r regen · ↵ commit · q cancel";
-	}
+	if (state.mode === "body") return "↵ newline · esc save · ctrl+e editor";
 	const body = state.commits[state.index]?.body;
+	const edit = body ? "b edit body" : "b write body";
+	if (state.expanded !== state.index) {
+		return `↑↓ move · space expand · e subject · ${edit} · r regen · ↵ commit · q cancel`;
+	}
 	const drop = body ? " · x drop body" : "";
-	return `space collapse · ${body ? "i edit body" : "i write body"} · g generate body${drop} · ctrl+e editor`;
+	return `space collapse · ${edit} · g generate body${drop} · ctrl+e editor`;
 }
 
 /**
@@ -299,9 +300,7 @@ export function render(state: ReviewState, live: Live, terminal: Terminal, width
 			cursorLine = lines.length;
 			lines.push(`${marker} ${live.text}`);
 		} else {
-			const rows = commit.body.split("\n").length;
-			const badge = !expanded && commit.body ? paint(terminal, "dim", `  ¶ ${rows} line${rows === 1 ? "" : "s"}`) : "";
-			lines.push(`${marker} ${paintSubject(terminal, commit.subject)}${badge}`);
+			lines.push(`${marker} ${paintSubject(terminal, commit.subject)}`);
 		}
 
 		// Not gated on the selection: navigation stays live during a generation, so the row being
@@ -314,9 +313,15 @@ export function render(state: ReviewState, live: Live, terminal: Terminal, width
 			cursorLine = lines.length;
 			lines.push(`  ${paint(terminal, "dim", "│")} ${live.text}`);
 			for (const text of buffer.lines.slice(buffer.row + 1)) lines.push(paint(terminal, "dim", `  │ ${text}`));
-		} else if (expanded) {
-			const text = commit.body || "No body for this commit";
-			for (const line of wrap(text, body)) lines.push(paint(terminal, "dim", `  │ ${line}`));
+		} else if (expanded || commit.body) {
+			// Collapsed rows show the head of the body, so the list says what each commit explains
+			// without going long. The last shown line is marked when there is more below it.
+			const wrapped = wrap(commit.body || "No body for this commit", body);
+			const shown = expanded ? wrapped : wrapped.slice(0, COLLAPSED_BODY);
+			for (const [row, line] of shown.entries()) {
+				const more = row === shown.length - 1 && wrapped.length > shown.length;
+				lines.push(paint(terminal, "dim", `  │ ${line}${more ? " …" : ""}`));
+			}
 		}
 
 		const shown = expanded ? commit.files : commit.files.slice(0, COLLAPSED_FILES);
@@ -350,14 +355,14 @@ const EMPTY_LIVE: Live = { text: "", column: 0 };
 /**
  * True when the review binds the key itself, so readline's reaction to it has to be undone.
  *
- * readline runs first and it does not know it is being driven: `return` empties the line, `ctrl+d`
- * deletes the character to the right, `ctrl+e` jumps to the end, and `up`/`down` walk its history.
- * For these the live line comes from state and readline is put back where the last frame left it.
- * Everything else, including plain typing and `backspace` past column 0, is readline's to own.
+ * readline runs first and it does not know it is being driven: `return` empties the line, `ctrl+e`
+ * jumps to the end, and `up`/`down` walk its history. For these the live line comes from state and
+ * readline is put back where the last frame left it. Everything else, including plain typing and
+ * `backspace` past column 0, is readline's to own.
  */
 function isClaimed(mode: ReviewMode, key: ReviewKey): boolean {
 	if (mode === "list") return true;
-	if (key.ctrl) return key.name === "d" || key.name === "e";
+	if (key.ctrl) return key.name === "e";
 	if (key.name === "return" || key.name === "escape") return true;
 	return mode === "body" && (key.name === "up" || key.name === "down");
 }

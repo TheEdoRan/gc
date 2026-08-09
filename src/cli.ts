@@ -1,3 +1,4 @@
+import { emitKeypressEvents, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
 
 import packageJson from "../package.json" with { type: "json" };
@@ -115,6 +116,14 @@ export async function run(args = process.argv.slice(2)): Promise<void> {
 	const context = await discoverContext(repository.root, repository.paths).finally(() => boot.stop());
 	const split = options.split ?? merged.split;
 	const renames: Array<[string, string]> = repository.renames.map(({ from, to }) => [from, to]);
+
+	// A lone escape is also the first byte of every arrow key, so readline holds it back until it
+	// knows which one it is: half a second by default, and @inquirer/core builds its interface
+	// without the option that shortens it. The wait is per stream and fixed when the decoder is
+	// installed, so stdin is armed here instead, and the interface the review creates later finds
+	// the stream already decoding and leaves it alone. 50ms still covers a terminal that splits a
+	// sequence across two reads, and is short enough to read as instant.
+	emitKeypressEvents(process.stdin, { escapeCodeTimeout: 50 } as unknown as Interface);
 
 	for (;;) {
 		// A reasoning model can think for a minute before its first token. Without a spinner the

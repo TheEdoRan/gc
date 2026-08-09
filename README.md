@@ -51,6 +51,7 @@ Before changing Git history, `gc` shows every proposed message and file group in
 | `↑` `↓` `j` `k` | Move the selection                                       |
 | `space`         | Expand the selected commit: full body and full file list |
 | `e`             | Edit the subject in place                                |
+| `b`             | Edit the body in place, expanding the row first          |
 | `ctrl+e`        | Open subject and body together in `$VISUAL` or `$EDITOR` |
 | `r`             | Throw the plan away and ask the model for another        |
 | `↵`             | Create the commits                                       |
@@ -59,27 +60,28 @@ Before changing Git history, `gc` shows every proposed message and file group in
 `r` is the only action that cannot be undone, and it sits one key away from `e`. It discards every subject you edited,
 every body you wrote by hand, and every body you spent a request on with `g`. It asks for no confirmation.
 
-Body actions live in the expanded view, so the collapsed list stays short:
+A collapsed row shows the first three lines of its body, marked with `…` when there is more. `space` shows the rest.
 
-| Key | Action                                                  |
-| --- | ------------------------------------------------------- |
-| `i` | Edit the body in place, or write one when there is none |
-| `g` | Ask the model to write a body for this commit           |
-| `x` | Drop the body                                           |
+The other body actions live in the expanded view, so the collapsed list stays short:
+
+| Key | Action                                        |
+| --- | --------------------------------------------- |
+| `g` | Ask the model to write a body for this commit |
+| `x` | Drop the body                                 |
 
 While the model is writing a body, only `↑` `↓` `j` `k`, `space`, `esc`, and `q` answer: nothing that would change the
 plan under the request runs. `esc` is modal in the list, so it stops that body first and cancels the review only once
 none is being written.
 
-Both editors are modal too, and both leave the commit as it was when you cancel:
+Both editors are modal too. The subject editor leaves the commit as it was when you cancel; the body editor always
+saves, so an unwanted line is deleted by hand rather than thrown away with a key:
 
-| Key      | In the subject editor (`e`)     | In the body editor (`i`)      |
+| Key      | In the subject editor (`e`)     | In the body editor (`b`)      |
 | -------- | ------------------------------- | ----------------------------- |
 | `↵`      | Save the subject                | Insert a newline              |
-| `ctrl+d` | Nothing                         | Save the body                 |
 | `ctrl+e` | Nothing                         | Open both in the editor       |
 | `↑` `↓`  | Nothing                         | Move between the body's lines |
-| `esc`    | Cancel, keeping the old subject | Cancel, keeping the old body  |
+| `esc`    | Cancel, keeping the old subject | Save the body and close       |
 
 `ctrl+e` is therefore available from the list and from the body editor, but not from the subject editor. It always opens
 the subject and the body together in `$VISUAL` or `$EDITOR`, with the subject on the first line, so editing that line
@@ -103,7 +105,7 @@ key when their endpoint does not require authentication.
 ### Commit bodies
 
 By default `gc` writes subjects only. Ask for a body on the commits that need one by expanding the row in the review
-list and pressing `g`, or write it yourself with `i`.
+list and pressing `g`, or write it yourself with `b`.
 
 Set `body` in the user config, in `.gc.yaml`, or with `--body` to change the default:
 
