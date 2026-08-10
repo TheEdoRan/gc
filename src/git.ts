@@ -452,6 +452,16 @@ export function batchPathspecs(files: string[], renames: RenamePair[], budget = 
 	return batches;
 }
 
+async function hasUpstream(root: string): Promise<boolean> {
+	return (await git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"], root, undefined, true)).code === 0;
+}
+
+/** Push the current branch, setting the upstream when it has none yet. */
+export async function pushCommits(root: string): Promise<void> {
+	const args = (await hasUpstream(root)) ? ["push"] : ["push", "--set-upstream", "origin", "HEAD"];
+	await git(args, root, undefined, false, true);
+}
+
 /** Commit the current index, splitting only at whole-file boundaries when requested. */
 export async function createCommits(root: string, groups: CommitGroup[]): Promise<void> {
 	if (groups.length === 0) throw new Error("The commit plan is empty");

@@ -8,6 +8,7 @@ import {
 	editorSeed,
 	initialState,
 	parseEditedMessage,
+	normalizeKey,
 	reduce,
 	render,
 	reviewCommits,
@@ -43,6 +44,12 @@ function press(state: ReviewState, ...names: string[]) {
 function promptOf(content: string, line: string): string {
 	const last = stripVTControlCharacters(content.split("\n").pop() ?? "");
 	return line.length > 0 ? last.slice(0, -line.length) : last;
+}
+
+/** The hint bar: the last line the prompt draws. */
+function hintOf(state: ReviewState): string {
+	const [, bottom] = render(state, idle, plain, 80);
+	return stripVTControlCharacters(bottom.split("\n").pop() ?? "");
 }
 
 test("navigation moves and collapses", () => {
@@ -149,6 +156,38 @@ test("enter commits and r regenerates", () => {
 	assert.equal(press(initialState(plan), "return").done, "commit");
 	assert.equal(press(initialState(plan), "r").done, "regenerate");
 	assert.equal(press(initialState(plan), "q").done, "cancel");
+});
+
+const ESC = String.fromCharCode(27);
+const csi = (body: string): ReviewKey & { sequence: string } => ({
+	name: "undefined",
+	ctrl: false,
+	shift: false,
+	sequence: `${ESC}[${body}u`,
+});
+
+test("shift+enter commits and pushes, and the hint says so", () => {
+	const [next] = reduce(initialState(plan), { name: "return", ctrl: false, shift: true }, idle);
+	assert.equal(next.done, "push");
+	assert.match(hintOf(initialState(plan)), /↵ commit \(⇧↵ to push\)/);
+});
+
+test("normalizeKey reads the sequences node cannot name", () => {
+	assert.deepEqual(normalizeKey(csi("13;2")), { name: "return", ctrl: false, shift: true });
+	assert.deepEqual(normalizeKey(csi("27")), { name: "escape", ctrl: false, shift: false });
+	assert.deepEqual(normalizeKey(csi("101;5")), { name: "e", ctrl: true, shift: false });
+	assert.deepEqual(normalizeKey(csi("99;5")), { name: "c", ctrl: true, shift: false });
+
+	// The older spelling of shift+enter, for a terminal bound to send it.
+	assert.deepEqual(normalizeKey({ name: "return", ctrl: false, shift: false, sequence: `${ESC}\r` }), {
+		name: "return",
+		ctrl: false,
+		shift: true,
+	});
+
+	// A key node already named is left exactly as it came.
+	const named = { name: "up", ctrl: false, shift: false, sequence: `${ESC}[A` };
+	assert.equal(normalizeKey(named), named);
 });
 
 test("ctrl+e asks for the external editor from anywhere", () => {

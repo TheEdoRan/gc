@@ -15,7 +15,8 @@ import {
 } from "./textarea.ts";
 
 export type ReviewMode = "list" | "subject" | "body";
-export type ReviewOutcome = "commit" | "regenerate" | "cancel";
+/** `push` is `commit` followed by a push of the branch. */
+export type ReviewOutcome = "commit" | "push" | "regenerate" | "cancel";
 
 export interface ReviewState {
 	commits: ProposedCommit[];
@@ -169,7 +170,7 @@ export function reduce(state: ReviewState, key: ReviewKey, live: Live): [ReviewS
 	if (state.generating !== null) return [state, NONE];
 
 	if (key.ctrl && key.name === "e") return [state, { type: "editor", index: state.index }];
-	if (key.name === "return") return [{ ...state, done: "commit" }, NONE];
+	if (key.name === "return") return [{ ...state, done: key.shift ? "push" : "commit" }, NONE];
 	if (key.name === "r") return [{ ...state, done: "regenerate" }, NONE];
 
 	if (key.name === "e") {
@@ -260,7 +261,7 @@ function hint(state: ReviewState): string {
 	const body = state.commits[state.index]?.body;
 	const edit = body ? "b edit body" : "b write body";
 	if (state.expanded !== state.index) {
-		return `↑↓ move · space expand · e subject · ${edit} · r regen · ↵ commit · q cancel`;
+		return `↑↓ move · space expand · e subject · ${edit} · r regen · ↵ commit (⇧↵ to push) · q cancel`;
 	}
 	const drop = body ? " · x drop body" : "";
 	return `space collapse · ${edit} · g generate body${drop} · ctrl+e editor`;
@@ -348,9 +349,54 @@ interface RawReadline {
 	history: string[];
 	pause: () => void;
 	resume: () => void;
+	emit: (event: string) => void;
 }
 
 const EMPTY_LIVE: Live = { text: "", column: 0 };
+
+/** The escape byte, built rather than written so no control character lands in this file. */
+const ESC = String.fromCharCode(27);
+
+/**
+ * The one Kitty keyboard protocol flag the review needs: disambiguate escape codes, which is what
+ * gives shift+enter a spelling of its own. Reporting the shift key itself, and so a hint that
+ * changes while it is held, needs a flag that turns every key into an escape code, which readline
+ * cannot be handed.
+ */
+const KEYBOARD_FLAGS = 0b1;
+/** Take a stack entry for the whole prompt, and give it back untouched on the way out. */
+const KEYBOARD_PUSH = `${ESC}[>${KEYBOARD_FLAGS}u`;
+const KEYBOARD_POP = `${ESC}[<1u`;
+/** Set that entry, which is how the flag is dropped and taken back inside the prompt. */
+const KEYBOARD_ON = `${ESC}[=${KEYBOARD_FLAGS};1u`;
+const KEYBOARD_OFF = `${ESC}[=0;1u`;
+
+/** `CSI <code>;<modifiers>u` without its escape: one modified key under the protocol. */
+const CSI_U = /^\[(\d+)(?:;(\d+))?u$/;
+/** Codes that are not a character. Only the ones the review reacts to are worth naming. */
+const CSI_U_NAMES: Record<string, string> = { "13": "return", "27": "escape" };
+
+/**
+ * Rebuild a key node's parser could not read.
+ *
+ * The flag moves shift+enter, escape and every ctrl+key onto `CSI u`, a shape node has no rule for,
+ * so it reports them unnamed. Escape then return is the older spelling of shift+enter, which
+ * terminals without the protocol are commonly bound to. Anything else is already named and passes
+ * through.
+ */
+export function normalizeKey(key: ReviewKey & { sequence?: string }): ReviewKey {
+	if (key.sequence === `${ESC}\r`) return { name: "return", ctrl: false, shift: true };
+	const match = key.sequence?.startsWith(ESC) ? CSI_U.exec(key.sequence.slice(1)) : null;
+	if (!match) return key;
+	// The modifier field is one plus a bit set: shift 1, alt 2, ctrl 4, super 8.
+	const modifiers = Number(match[2] ?? "1") - 1;
+	const code = match[1]!;
+	return {
+		name: CSI_U_NAMES[code] ?? String.fromCodePoint(Number(code)),
+		ctrl: (modifiers & 4) !== 0,
+		shift: (modifiers & 1) !== 0,
+	};
+}
 
 /**
  * True when the review binds the key itself, so readline's reaction to it has to be undone.
@@ -423,8 +469,36 @@ export const reviewCommits = createPrompt<ReviewResult, ReviewConfig>((config, d
 		};
 	}, []);
 
-	useKeypress((key, readline) => {
+	// Without the protocol the terminal sends the same bytes for enter and shift+enter, and says
+	// nothing at all about a modifier being held. A terminal that does not speak it ignores every one
+	// of these sequences, and shift+enter stays a plain commit.
+	const setKeyboard = (on: boolean) => {
+		if (terminal.interactive) process.stdout.write(on ? KEYBOARD_ON : KEYBOARD_OFF);
+	};
+
+	useEffect(() => {
+		if (terminal.interactive) process.stdout.write(KEYBOARD_PUSH);
+		return () => {
+			if (terminal.interactive) process.stdout.write(KEYBOARD_POP);
+		};
+	}, []);
+
+	// The flags are the list's alone. Under them readline is handed escape codes where it expects
+	// characters, so both in-place editors run without them, and so does the external one.
+	useEffect(() => {
+		setKeyboard(state.mode === "list");
+	}, [state.mode]);
+
+	useKeypress((raw, readline) => {
 		const rl = readline as unknown as RawReadline;
+		const key = normalizeKey(raw);
+
+		// The flags also stop the terminal turning ctrl+c into a signal, so the prompt raises it. The
+		// listener @inquirer/core puts here is what turns it back into an exit.
+		if (key.ctrl && key.name === "c") {
+			rl.emit("SIGINT");
+			return;
+		}
 
 		// Return in the body box is a newline, not a submission, but readline still files every one
 		// of them in its history, where up and down could recall one into an unrelated line.
@@ -446,8 +520,10 @@ export const reviewCommits = createPrompt<ReviewResult, ReviewConfig>((config, d
 			const body = next.buffer ? toText(next.buffer) : (commit?.body ?? "");
 			// readline has to let go of the terminal while the child owns it. External-editor
 			// restores raw mode on exit, and the box stays open behind it: it closes on success
-			// only, so a child that never starts does not take what was typed with it.
+			// only, so a child that never starts does not take what was typed with it. The flags go
+			// too: an editor that does not push its own would read every key as an escape code.
 			rl.pause();
+			setKeyboard(false);
 			void editAsync(commit ? editorSeed(commit.subject, body) : "", { postfix: ".txt" })
 				.then(
 					(edited) => {
@@ -461,7 +537,11 @@ export const reviewCommits = createPrompt<ReviewResult, ReviewConfig>((config, d
 					},
 					(error: unknown) => setState({ ...latest.current, error: `Editor failed: ${String(error)}` })
 				)
-				.finally(() => rl.resume());
+				.finally(() => {
+					rl.resume();
+					// The mode effect only fires on a change, and the editor can leave it where it was.
+					setKeyboard(latest.current.mode === "list");
+				});
 		}
 
 		if (effect.type === "generate") {

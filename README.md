@@ -55,7 +55,13 @@ Before changing Git history, `gc` shows every proposed message and file group in
 | `ctrl+e`        | Open subject and body together in `$VISUAL` or `$EDITOR` |
 | `r`             | Throw the plan away and ask the model for another        |
 | `↵`             | Create the commits                                       |
+| `⇧↵`            | Create the commits, then push the branch                 |
 | `q` `esc`       | Cancel without committing                                |
+
+`⇧↵` pushes with `git push`, and sets the upstream to `origin` when the branch has none yet. It needs the Kitty
+keyboard protocol, which `gc` turns on while the list is open and off again for every editor and on the way out. Ghostty,
+Kitty, WezTerm, foot, Alacritty and recent iTerm2 and Windows Terminal speak it. Anywhere else `⇧↵` commits without
+pushing.
 
 `r` is the only action that cannot be undone, and it sits one key away from `e`. It discards every subject you edited,
 every body you wrote by hand, and every body you spent a request on with `g`. It asks for no confirmation.

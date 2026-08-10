@@ -13,7 +13,7 @@ import {
 	type BodyMode,
 } from "./config.ts";
 import { discoverContext } from "./context.ts";
-import { createCommits, readRepository } from "./git.ts";
+import { createCommits, pushCommits, readRepository } from "./git.ts";
 import { reviewCommits } from "./review.ts";
 import { createSpinner, createTerminal } from "./terminal.ts";
 
@@ -168,6 +168,7 @@ export async function run(args = process.argv.slice(2)): Promise<void> {
 		if (outcome === "regenerate") continue;
 		if (outcome === "cancel") return void process.stdout.write("Cancelled.\n");
 		await createCommits(repository.root, commits);
+		if (outcome === "push") await pushCommits(repository.root);
 		return;
 	}
 }
