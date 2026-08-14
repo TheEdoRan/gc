@@ -1,5 +1,11 @@
 # @theedoran/gc
 
+## 0.3.2
+
+### Patch Changes
+
+- 8ad1670: Improve commit generation and active profile status text.
+
 ## 0.3.1
 
 ### Patch Changes
