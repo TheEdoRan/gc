@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { chmod, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
+import { styleText } from "node:util";
 
 import { confirm, input, password, select } from "@inquirer/prompts";
 import envPaths from "env-paths";
@@ -384,7 +385,11 @@ export async function selectProfile(requestedName?: string, options: ConfigOptio
 		}
 		name = await (options.prompts ?? configPrompts).select({
 			message: "Active profile",
-			choices: names.map((profile) => ({ name: profile, value: profile })),
+			default: config.activeProfile,
+			choices: names.map((profile) => ({
+				name: `${profile}${profile === config.activeProfile ? ` ${styleText("dim", "(active)")}` : ""}`,
+				value: profile,
+			})),
 		});
 	}
 

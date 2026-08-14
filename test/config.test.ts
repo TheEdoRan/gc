@@ -181,7 +181,7 @@ void test("updates a profile without exposing or replacing its stored key", asyn
 	assert.equal(updated.profiles.personal?.baseUrl, "https://api.openai.com/v1");
 });
 
-void test("switches the active profile directly", async () => {
+void test("switches profiles directly and starts selection on the active profile", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "gc-switch-"));
 	const path = join(directory, "config.yaml");
 	await writeConfig(
@@ -196,6 +196,21 @@ void test("switches the active profile directly", async () => {
 	);
 	assert.equal((await selectProfile("work", { path })).activeProfile, "work");
 	assert.equal((await readConfig(path))?.activeProfile, "work");
+	let selection: Parameters<ConfigPrompts["select"]>[0] | undefined;
+	await selectProfile(undefined, {
+		path,
+		prompts: {
+			input: async () => "",
+			password: async () => "",
+			confirm: async () => false,
+			select: async (options) => {
+				selection = options;
+				return options.default!;
+			},
+		},
+	});
+	assert.equal(selection?.default, "work");
+	assert.match(selection.choices.find(({ value }) => value === "work")!.name, /work \(active\)/);
 });
 
 void test("body defaults to manual and rejects unknown values", async () => {
