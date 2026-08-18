@@ -1,5 +1,11 @@
 # @theedoran/gc
 
+## 0.4.0
+
+### Minor Changes
+
+- 38d5a61: Add direct presets and searchable setup for OpenAI-compatible providers.
+
 ## 0.3.2
 
 ### Patch Changes
