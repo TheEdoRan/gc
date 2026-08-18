@@ -1,5 +1,11 @@
 # @theedoran/gc
 
+## 0.4.1
+
+### Patch Changes
+
+- bb30619: Add edit and delete shortcuts to the interactive profile list.
+
 ## 0.4.0
 
 ### Minor Changes
