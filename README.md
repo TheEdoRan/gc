@@ -98,8 +98,8 @@ split plan fails, earlier successful commits remain and all uncommitted patches 
 
 ## Profiles and configuration
 
-Run `gc profile` to select a profile interactively, or `gc profile <name>` to switch directly. Initializing or selecting a
-profile makes it the default for future runs.
+Run `gc profile` to manage profiles interactively. Use `enter` to select a profile, `e` to edit it, or `d` to delete it.
+Run `gc profile <name>` to switch directly. Initializing or selecting a profile makes it the default for future runs.
 
 Configuration is stored in `config.yaml` under the native per-user configuration directory selected by
 [`env-paths`](https://github.com/sindresorhus/env-paths). The directory is created with mode `0700` and the file with mode

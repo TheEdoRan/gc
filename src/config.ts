@@ -3,6 +3,7 @@ import { chmod, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { styleText } from "node:util";
 
+import { createPrompt, isDownKey, isEnterKey, isUpKey, useKeypress, usePagination, useState } from "@inquirer/core";
 import { confirm, input, password, search, select } from "@inquirer/prompts";
 import envPaths from "env-paths";
 import { parseDocument, stringify } from "yaml";
@@ -58,9 +59,43 @@ export interface ConfigPrompts {
 export interface ConfigOptions {
 	path?: string;
 	prompts?: ConfigPrompts;
+	profilePrompt?: typeof profilePrompt;
 	modelPrompts?: Parameters<typeof selectModel>[1];
 	fetcher?: typeof fetch;
 }
+
+export type ProfileAction = { action: "select" | "edit" | "delete"; name: string };
+
+export const profilePrompt = createPrompt<ProfileAction, { profiles: string[]; activeProfile: string }>(
+	({ profiles, activeProfile }, done) => {
+		const [active, setActive] = useState(Math.max(profiles.indexOf(activeProfile), 0));
+		const [error, setError] = useState("");
+
+		useKeypress((key, readline) => {
+			readline.clearLine(0);
+			setError("");
+			if (isUpKey(key) || isDownKey(key)) {
+				setActive((active + (isUpKey(key) ? -1 : 1) + profiles.length) % profiles.length);
+			} else if (isEnterKey(key)) {
+				done({ action: "select", name: profiles[active]! });
+			} else if (key.name === "e" && !key.ctrl) {
+				done({ action: "edit", name: profiles[active]! });
+			} else if (key.name === "d" && !key.ctrl) {
+				if (profiles.length === 1) setError("The only profile cannot be deleted.");
+				else done({ action: "delete", name: profiles[active]! });
+			}
+		});
+
+		const page = usePagination({
+			items: profiles,
+			active,
+			pageSize: 7,
+			renderItem: ({ item, isActive }) =>
+				`${isActive ? "\u276f" : " "} ${item}${item === activeProfile ? ` ${styleText("dim", "(active)")}` : ""}`,
+		});
+		return `? Active profile\n${page}\n${error ? `${styleText("red", error)}\n` : ""}\u2191\u2193 move \u00b7 \u21b5 select \u00b7 e edit \u00b7 d delete\u001b[?25l`;
+	}
+);
 
 const configPrompts: ConfigPrompts = {
 	input: (options) => input(options),
@@ -370,31 +405,40 @@ export async function selectProfile(requestedName?: string, options: ConfigOptio
 	const config = await readConfig(path);
 	if (!config) throw new Error("Run gc init first");
 
-	let name = requestedName;
-	if (name && !Object.hasOwn(config.profiles, name)) throw new Error(`Unknown profile: ${name}`);
-	if (!name) {
-		const names = Object.keys(config.profiles);
-		if (names.length === 1) {
-			const create = await (options.prompts ?? configPrompts).confirm({
-				message: "Only one profile exists. Create another?",
-				default: true,
+	if (requestedName && !Object.hasOwn(config.profiles, requestedName)) {
+		throw new Error(`Unknown profile: ${requestedName}`);
+	}
+	const choice = requestedName
+		? { action: "select" as const, name: requestedName }
+		: await (options.profilePrompt ?? profilePrompt)({
+				profiles: Object.keys(config.profiles),
+				activeProfile: config.activeProfile,
 			});
-			if (!create) return config;
-			const updated = await setupProfile(config, undefined, options);
-			await writeConfig(updated, path);
-			return updated;
-		}
-		name = await (options.prompts ?? configPrompts).select({
-			message: "Active profile",
-			default: config.activeProfile,
-			choices: names.map((profile) => ({
-				name: `${profile}${profile === config.activeProfile ? ` ${styleText("dim", "(active)")}` : ""}`,
-				value: profile,
-			})),
+
+	if (choice.action === "edit") {
+		const edited = await setupProfile(config, choice.name, options);
+		const updated = { ...edited, activeProfile: config.activeProfile };
+		await writeConfig(updated, path);
+		return updated;
+	}
+	if (choice.action === "delete") {
+		const remove = await (options.prompts ?? configPrompts).confirm({
+			message: `Delete profile "${choice.name}"?`,
+			default: false,
 		});
+		if (!remove) return config;
+		const profiles = { ...config.profiles };
+		delete profiles[choice.name];
+		const updated = {
+			...config,
+			profiles,
+			activeProfile: choice.name === config.activeProfile ? Object.keys(profiles)[0]! : config.activeProfile,
+		};
+		await writeConfig(updated, path);
+		return updated;
 	}
 
-	const updated = { ...config, activeProfile: name };
+	const updated = { ...config, activeProfile: choice.name };
 	await writeConfig(updated, path);
 	return updated;
 }

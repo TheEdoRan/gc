@@ -2,11 +2,14 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { PassThrough } from "node:stream";
 import { test } from "node:test";
+import { stripVTControlCharacters } from "node:util";
 
 import {
 	getConfigPath,
 	mergeConfig,
+	profilePrompt,
 	readConfig,
 	readProjectConfig,
 	selectProfile,
@@ -31,6 +34,22 @@ const config: Config = {
 		},
 	},
 };
+
+async function driveProfilePrompt(profiles: string[], activeProfile: string, ...keys: string[]) {
+	const input = new PassThrough();
+	const output = new PassThrough();
+	let drawn = "";
+	output.on("data", (data: Buffer) => {
+		drawn += data.toString();
+	});
+	const result = profilePrompt({ profiles, activeProfile }, { input, output });
+	await new Promise((resolve) => setImmediate(resolve));
+	for (const key of keys) {
+		input.write(key === "down" ? "\u001b[B" : key === "enter" ? "\r" : key);
+		await new Promise((resolve) => setImmediate(resolve));
+	}
+	return { result, text: () => stripVTControlCharacters(drawn) };
+}
 
 void test("reads and atomically writes a strict config", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "gc-config-"));
@@ -228,7 +247,7 @@ void test("accepts every provider and requires keys only for remote presets", ()
 	);
 });
 
-void test("switches profiles directly and starts selection on the active profile", async () => {
+void test("switches profiles directly and starts interactive selection on the active profile", async () => {
 	const directory = await mkdtemp(join(tmpdir(), "gc-switch-"));
 	const path = join(directory, "config.yaml");
 	await writeConfig(
@@ -243,22 +262,70 @@ void test("switches profiles directly and starts selection on the active profile
 	);
 	assert.equal((await selectProfile("work", { path })).activeProfile, "work");
 	assert.equal((await readConfig(path))?.activeProfile, "work");
-	let selection: Parameters<ConfigPrompts["select"]>[0] | undefined;
+	let selection: { profiles: string[]; activeProfile: string } | undefined;
 	await selectProfile(undefined, {
 		path,
-		prompts: {
-			input: async () => "",
-			password: async () => "",
-			search: async () => "",
-			confirm: async () => false,
-			select: async (options) => {
-				selection = options;
-				return options.default!;
-			},
+		profilePrompt: async (options) => {
+			selection = options;
+			return { action: "select", name: options.activeProfile };
 		},
 	});
-	assert.equal(selection?.default, "work");
-	assert.match(selection.choices.find(({ value }) => value === "work")!.name, /work \(active\)/);
+	assert.deepEqual(selection, { profiles: ["personal", "work"], activeProfile: "work" });
+});
+
+void test("edits and deletes profiles without changing the active profile unexpectedly", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "gc-manage-"));
+	const path = join(directory, "config.yaml");
+	await writeConfig(
+		{
+			...config,
+			profiles: {
+				...config.profiles,
+				work: { provider: "compatible", baseUrl: "http://localhost:11434/v1", model: "old", apiKey: "" },
+			},
+		},
+		path
+	);
+	const prompts: ConfigPrompts = {
+		input: async () => "http://localhost:11434/v1",
+		password: async () => "",
+		select: async () => "manual",
+		search: async () => "compatible",
+		confirm: async (options) => options.message.startsWith("Delete"),
+	};
+	await selectProfile(undefined, {
+		path,
+		prompts,
+		profilePrompt: async () => ({ action: "edit", name: "work" }),
+		modelPrompts: { input: async () => "new", search: async () => "unused" },
+		fetcher: async () => new Response("unavailable", { status: 503 }),
+	});
+	assert.equal((await readConfig(path))?.activeProfile, "personal");
+	assert.equal((await readConfig(path))?.profiles.work?.model, "new");
+
+	await selectProfile(undefined, {
+		path,
+		prompts,
+		profilePrompt: async () => ({ action: "delete", name: "personal" }),
+	});
+	assert.deepEqual(await readConfig(path), {
+		activeProfile: "work",
+		split: false,
+		body: "manual",
+		profiles: {
+			work: { provider: "compatible", baseUrl: "http://localhost:11434/v1", model: "new", apiKey: "" },
+		},
+	});
+});
+
+void test("profile prompt binds e and d and protects the only profile", { timeout: 5000 }, async () => {
+	const edit = await driveProfilePrompt(["personal", "work"], "personal", "down", "e");
+	assert.deepEqual(await edit.result, { action: "edit", name: "work" });
+	const remove = await driveProfilePrompt(["personal", "work"], "personal", "d");
+	assert.deepEqual(await remove.result, { action: "delete", name: "personal" });
+	const only = await driveProfilePrompt(["personal"], "personal", "d", "enter");
+	assert.match(only.text(), /The only profile cannot be deleted\./);
+	assert.deepEqual(await only.result, { action: "select", name: "personal" });
 });
 
 void test("body defaults to manual and rejects unknown values", async () => {
