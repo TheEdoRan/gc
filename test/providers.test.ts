@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { after, before, test } from "node:test";
 
-import { listModels, selectModel, type ModelPrompts, type Provider } from "../src/providers.ts";
+import { listModels, PROVIDER_PRESETS, selectModel, type ModelPrompts, type Provider } from "../src/providers.ts";
 
 let baseUrl = "";
 const requests: Array<{
@@ -53,8 +53,26 @@ void test("uses Anthropic model headers", async () => {
 });
 
 void test("allows a compatible provider without a key", async () => {
-	await listModels({ provider: "compatible", baseUrl, apiKey: "" });
-	assert.equal(requests.at(-1)?.authorization, undefined);
+	for (const provider of ["compatible", "lmstudio", "ollama"] satisfies Provider[]) {
+		await listModels({ provider, baseUrl, apiKey: "" });
+		assert.equal(requests.at(-1)?.authorization, undefined);
+	}
+});
+
+void test("uses bearer authentication for compatible presets", async () => {
+	await listModels({ provider: "groq", baseUrl, apiKey: "groq-secret" });
+	assert.equal(requests.at(-1)?.authorization, "Bearer groq-secret");
+});
+
+void test("defines valid preset URLs", () => {
+	for (const [provider, preset] of Object.entries(PROVIDER_PRESETS)) {
+		if (provider === "compatible") {
+			assert.equal(preset.baseUrl, "");
+			continue;
+		}
+		const url = new URL(preset.baseUrl);
+		assert(["http:", "https:"].includes(url.protocol));
+	}
 });
 
 void test("falls back to manual model entry when listing fails", async () => {
@@ -87,9 +105,9 @@ void test("searches the fetched model list", async () => {
 			return choices[0]?.value ?? "";
 		},
 	};
-	for (const provider of ["openai", "anthropic", "compatible"] satisfies Provider[]) {
+	for (const provider of ["openai", "anthropic", "compatible", "groq", "ollama"] satisfies Provider[]) {
 		assert.equal(
-			await selectModel({ provider, baseUrl, apiKey: provider === "compatible" ? "" : "key" }, prompts),
+			await selectModel({ provider, baseUrl, apiKey: PROVIDER_PRESETS[provider].requiresApiKey ? "key" : "" }, prompts),
 			"z-model"
 		);
 	}

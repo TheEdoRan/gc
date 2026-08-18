@@ -7,7 +7,7 @@ approve the complete plan.
 
 - Node.js 22.13.0 or newer
 - Git
-- An OpenAI, Anthropic, or OpenAI-compatible API
+- A supported AI provider or OpenAI-compatible API
 
 ## Install
 
@@ -17,8 +17,8 @@ gc init
 ```
 
 `gc init` creates or updates a profile, activates it, asks how commit bodies should be generated, and asks whether
-commit splitting should be enabled by default. Setup includes provider, base URL, API key, and model selection. If the
-provider cannot list its models, you can enter a model name manually.
+commit splitting should be enabled by default. Setup includes searchable provider selection, an editable endpoint,
+API key, and model selection. If the provider cannot list its models, you can enter a model name manually.
 
 ## Usage
 
@@ -105,8 +105,13 @@ Configuration is stored in `config.yaml` under the native per-user configuration
 [`env-paths`](https://github.com/sindresorhus/env-paths). The directory is created with mode `0700` and the file with mode
 `0600` where the operating system supports POSIX permissions.
 
-API keys are stored as plaintext in that protected file and are never printed by `gc`. Compatible profiles may omit the
-key when their endpoint does not require authentication.
+API keys are stored as plaintext in that protected file and are never printed by `gc`. Keys are optional for custom
+OpenAI-compatible endpoints, LM Studio, and Ollama.
+
+`gc` includes direct presets for Anthropic, Cerebras, Chutes, DeepInfra, DeepSeek, Fireworks, Gemini, Groq, LM Studio,
+MiniMax, Mistral, Moonshot, Ollama, OpenAI, OpenRouter, Qwen, Qwen China, Together, xAI, Z.AI, and Z.AI Coding. All
+presets except OpenAI and Anthropic use the OpenAI-compatible transport. The preset URL remains editable for proxies
+and enterprise endpoints. Choose OpenAI-compatible to supply any other compatible endpoint.
 
 ### Commit bodies
 

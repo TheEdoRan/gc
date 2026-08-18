@@ -27,7 +27,12 @@ import type { StagedFile } from "../src/git.ts";
 async function startProviderDouble(options: { content: string; delayMs?: number }) {
 	/** The raw request bodies the double was sent, for the tests that assert on what was asked. */
 	const asked: string[] = [];
+	const requests: Array<{ url: string; authorization?: string }> = [];
 	const server = createServer((request, response) => {
+		requests.push({
+			url: request.url ?? "",
+			...(request.headers.authorization ? { authorization: request.headers.authorization } : {}),
+		});
 		let received = "";
 		request.on("data", (chunk: Buffer) => {
 			received += chunk.toString();
@@ -55,6 +60,7 @@ async function startProviderDouble(options: { content: string; delayMs?: number 
 	assert(address && typeof address === "object");
 	return {
 		asked,
+		requests,
 		baseUrl: `http://127.0.0.1:${address.port}/v1`,
 		close: () =>
 			new Promise<void>((resolve) => {
@@ -625,6 +631,31 @@ async function bodyFrom(content: string, subject = "feat: x") {
 		await server.close();
 	}
 }
+
+test("compatible presets use chat completions and optional bearer authentication", { timeout: 10_000 }, async () => {
+	const server = await startProviderDouble({ content: "Because it changed." });
+	try {
+		for (const [provider, apiKey] of [
+			["groq", "secret"],
+			["ollama", ""],
+		] as const) {
+			await generateCommitBody({
+				profile: { provider, baseUrl: server.baseUrl, model: "m", apiKey },
+				subject: "feat: x",
+				files: [
+					{ path: "a.ts", status: "M", added: 1, deleted: 0, bytes: 10, head: "", truncated: false, binary: false },
+				],
+				context: { root: "/r", instructions: [], context: [] },
+			});
+		}
+		assert.deepEqual(server.requests, [
+			{ url: "/v1/chat/completions", authorization: "Bearer secret" },
+			{ url: "/v1/chat/completions" },
+		]);
+	} finally {
+		await server.close();
+	}
+});
 
 test("generateCommitBody returns the model's prose and drops a repeated subject", { timeout: 10_000 }, async () => {
 	assert.equal(

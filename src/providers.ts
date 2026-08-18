@@ -1,6 +1,145 @@
 import { input, search } from "@inquirer/prompts";
 
-export type Provider = "openai" | "anthropic" | "compatible";
+export const PROVIDER_PRESETS = {
+	openai: {
+		label: "OpenAI",
+		adapter: "openai",
+		baseUrl: "https://api.openai.com/v1",
+		requiresApiKey: true,
+	},
+	anthropic: {
+		label: "Anthropic",
+		adapter: "anthropic",
+		baseUrl: "https://api.anthropic.com/v1",
+		requiresApiKey: true,
+	},
+	cerebras: {
+		label: "Cerebras",
+		adapter: "compatible",
+		baseUrl: "https://api.cerebras.ai/v1",
+		requiresApiKey: true,
+	},
+	chutes: {
+		label: "Chutes",
+		adapter: "compatible",
+		baseUrl: "https://llm.chutes.ai/v1",
+		requiresApiKey: true,
+	},
+	deepinfra: {
+		label: "DeepInfra",
+		adapter: "compatible",
+		baseUrl: "https://api.deepinfra.com/v1/openai",
+		requiresApiKey: true,
+	},
+	deepseek: {
+		label: "DeepSeek",
+		adapter: "compatible",
+		baseUrl: "https://api.deepseek.com/v1",
+		requiresApiKey: true,
+	},
+	fireworks: {
+		label: "Fireworks",
+		adapter: "compatible",
+		baseUrl: "https://api.fireworks.ai/inference/v1",
+		requiresApiKey: true,
+	},
+	gemini: {
+		label: "Gemini",
+		adapter: "compatible",
+		baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+		requiresApiKey: true,
+	},
+	groq: {
+		label: "Groq",
+		adapter: "compatible",
+		baseUrl: "https://api.groq.com/openai/v1",
+		requiresApiKey: true,
+	},
+	lmstudio: {
+		label: "LM Studio",
+		adapter: "compatible",
+		baseUrl: "http://localhost:1234/v1",
+		requiresApiKey: false,
+	},
+	minimax: {
+		label: "MiniMax",
+		adapter: "compatible",
+		baseUrl: "https://api.minimax.io/v1",
+		requiresApiKey: true,
+	},
+	mistral: {
+		label: "Mistral",
+		adapter: "compatible",
+		baseUrl: "https://api.mistral.ai/v1",
+		requiresApiKey: true,
+	},
+	moonshot: {
+		label: "Moonshot",
+		adapter: "compatible",
+		baseUrl: "https://api.moonshot.ai/v1",
+		requiresApiKey: true,
+	},
+	ollama: {
+		label: "Ollama",
+		adapter: "compatible",
+		baseUrl: "http://localhost:11434/v1",
+		requiresApiKey: false,
+	},
+	openrouter: {
+		label: "OpenRouter",
+		adapter: "compatible",
+		baseUrl: "https://openrouter.ai/api/v1",
+		requiresApiKey: true,
+	},
+	qwen: {
+		label: "Qwen",
+		adapter: "compatible",
+		baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+		requiresApiKey: true,
+	},
+	"qwen-cn": {
+		label: "Qwen China",
+		adapter: "compatible",
+		baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+		requiresApiKey: true,
+	},
+	together: {
+		label: "Together",
+		adapter: "compatible",
+		baseUrl: "https://api.together.xyz/v1",
+		requiresApiKey: true,
+	},
+	xai: {
+		label: "xAI",
+		adapter: "compatible",
+		baseUrl: "https://api.x.ai/v1",
+		requiresApiKey: true,
+	},
+	zai: {
+		label: "Z.AI",
+		adapter: "compatible",
+		baseUrl: "https://api.z.ai/api/paas/v4",
+		requiresApiKey: true,
+	},
+	"zai-coding": {
+		label: "Z.AI Coding",
+		adapter: "compatible",
+		baseUrl: "https://api.z.ai/api/coding/paas/v4",
+		requiresApiKey: true,
+	},
+	compatible: {
+		label: "OpenAI-compatible",
+		adapter: "compatible",
+		baseUrl: "",
+		requiresApiKey: false,
+	},
+} as const;
+
+export type Provider = keyof typeof PROVIDER_PRESETS;
+
+export function isProvider(value: unknown): value is Provider {
+	return typeof value === "string" && Object.hasOwn(PROVIDER_PRESETS, value);
+}
 
 export interface Profile {
 	provider: Provider;
@@ -10,12 +149,6 @@ export interface Profile {
 	maxInputTokens?: number;
 	maxOutputTokens?: number;
 }
-
-export const DEFAULT_BASE_URLS = {
-	openai: "https://api.openai.com/v1",
-	anthropic: "https://api.anthropic.com/v1",
-	compatible: "",
-} as const satisfies Record<Provider, string>;
 
 export interface ModelPrompts {
 	input(options: {
@@ -52,7 +185,7 @@ function modelsUrl(baseUrl: string): URL {
 
 export async function listModels(profile: Pick<Profile, "provider" | "baseUrl" | "apiKey">, fetcher = fetch) {
 	const headers = new Headers({ accept: "application/json" });
-	if (profile.provider === "anthropic") {
+	if (PROVIDER_PRESETS[profile.provider].adapter === "anthropic") {
 		if (profile.apiKey) headers.set("x-api-key", profile.apiKey);
 		headers.set("anthropic-version", "2023-06-01");
 	} else if (profile.apiKey) {

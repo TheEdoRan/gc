@@ -3,11 +3,11 @@ import { chmod, mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { styleText } from "node:util";
 
-import { confirm, input, password, select } from "@inquirer/prompts";
+import { confirm, input, password, search, select } from "@inquirer/prompts";
 import envPaths from "env-paths";
 import { parseDocument, stringify } from "yaml";
 
-import { DEFAULT_BASE_URLS, selectModel, type Profile, type Provider } from "./providers.ts";
+import { isProvider, PROVIDER_PRESETS, selectModel, type Profile } from "./providers.ts";
 
 export type { Profile, Provider } from "./providers.ts";
 
@@ -47,6 +47,11 @@ export interface ConfigPrompts {
 		choices: Array<{ name: string; value: string }>;
 		default?: string;
 	}): Promise<string>;
+	search(options: {
+		message: string;
+		default?: string;
+		source: (term?: string) => Promise<Array<{ name: string; value: string }>>;
+	}): Promise<string>;
 	confirm(options: { message: string; default?: boolean }): Promise<boolean>;
 }
 
@@ -61,6 +66,7 @@ const configPrompts: ConfigPrompts = {
 	input: (options) => input(options),
 	password: (options) => password(options),
 	select: (options) => select(options),
+	search: (options) => search(options),
 	confirm: (options) => confirm(options),
 };
 
@@ -70,7 +76,6 @@ const profileKeys = ["provider", "baseUrl", "model", "apiKey"];
 const projectKeys = ["excludeContent", "includeContent", "split", "body"];
 /** Credentials must come from the user config only, never from a file committed to a repository. */
 const forbiddenProjectKeys = ["apiKey", "profiles", "activeProfile"];
-const providers: Provider[] = ["openai", "anthropic", "compatible"];
 const maxInputTokensLimit = 2_000_000;
 const maxOutputTokensLimit = 200_000;
 
@@ -94,10 +99,6 @@ function globs(value: Record<string, unknown>, key: string, label: string) {
 	if (!Object.hasOwn(value, key)) return {};
 	if (!isGlobList(value[key])) throw new Error(`Invalid ${key} in ${label}`);
 	return { [key]: value[key] } as Record<string, string[]>;
-}
-
-function isProvider(value: unknown): value is Provider {
-	return typeof value === "string" && providers.some((provider) => provider === value);
 }
 
 function isBodyMode(value: unknown): value is BodyMode {
@@ -144,7 +145,7 @@ export function validateConfig(value: unknown): Config {
 		}
 		if (typeof baseUrl !== "string" || !validUrl(baseUrl)) throw new Error(`Invalid baseUrl in profile: ${name}`);
 		if (typeof model !== "string" || !model.trim()) throw new Error(`Invalid model in profile: ${name}`);
-		if (typeof apiKey !== "string" || (provider !== "compatible" && !apiKey)) {
+		if (typeof apiKey !== "string" || (PROVIDER_PRESETS[provider].requiresApiKey && !apiKey)) {
 			throw new Error(`Invalid apiKey in profile: ${name}`);
 		}
 		if (
@@ -289,21 +290,20 @@ export async function setupProfile(
 	const name = (await profileName(config, requestedName, prompts)).trim();
 	if (!name) throw new Error("Profile name cannot be empty");
 	const existing = config?.profiles[name];
-	const selectedProvider = await prompts.select({
+	const selectedProvider = await prompts.search({
 		message: "Provider",
 		...(existing ? { default: existing.provider } : {}),
-		choices: [
-			{ name: "OpenAI", value: "openai" },
-			{ name: "Anthropic", value: "anthropic" },
-			{ name: "OpenAI-compatible", value: "compatible" },
-		],
+		source: async (term = "") =>
+			Object.entries(PROVIDER_PRESETS)
+				.filter(([id, preset]) => `${preset.label} ${id}`.toLowerCase().includes(term.toLowerCase()))
+				.map(([value, preset]) => ({ name: preset.label, value })),
 	});
 	if (!isProvider(selectedProvider)) throw new Error("Invalid provider selection");
 	const provider = selectedProvider;
 	const baseUrl = (
 		await prompts.input({
 			message: "Base URL",
-			default: existing?.provider === provider ? existing.baseUrl : DEFAULT_BASE_URLS[provider],
+			default: existing?.provider === provider ? existing.baseUrl : PROVIDER_PRESETS[provider].baseUrl,
 			validate: (value) => validUrl(value) || "Enter an HTTP or HTTPS URL",
 		})
 	)
@@ -313,7 +313,8 @@ export async function setupProfile(
 	const enteredKey = await prompts.password({
 		message: existing ? "API key (leave blank to keep the current key)" : "API key",
 		mask: "*",
-		validate: (value) => (provider === "compatible" || value || currentKey ? true : "Enter an API key"),
+		validate: (value) =>
+			PROVIDER_PRESETS[provider].requiresApiKey && !value && !currentKey ? "Enter an API key" : true,
 	});
 	const apiKey = enteredKey || currentKey || "";
 	const model = await selectModel(

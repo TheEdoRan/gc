@@ -7,6 +7,7 @@ import type { BodyMode, Profile } from "./config.ts";
 import { buildPrompt, clampDocuments, type PromptGroup, type RepositoryContext } from "./context.ts";
 import { buildEvidence, buildFallbackPlan, buildGroups } from "./evidence.ts";
 import type { StagedFile } from "./git.ts";
+import { PROVIDER_PRESETS } from "./providers.ts";
 
 export interface ProposedCommit {
 	subject: string;
@@ -313,14 +314,15 @@ function balancedEnd(text: string, start: number): number {
 }
 
 function modelFor(profile: Profile) {
-	if (profile.provider === "openai") {
+	const { adapter } = PROVIDER_PRESETS[profile.provider];
+	if (adapter === "openai") {
 		return createOpenAI({ apiKey: profile.apiKey, baseURL: profile.baseUrl })(profile.model);
 	}
-	if (profile.provider === "anthropic") {
+	if (adapter === "anthropic") {
 		return createAnthropic({ apiKey: profile.apiKey, baseURL: profile.baseUrl })(profile.model);
 	}
 	return createOpenAICompatible({
-		name: "compatible",
+		name: profile.provider,
 		...(profile.apiKey ? { apiKey: profile.apiKey } : {}),
 		baseURL: profile.baseUrl,
 	})(profile.model);

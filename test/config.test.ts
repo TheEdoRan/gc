@@ -17,7 +17,7 @@ import {
 	type Config,
 	type ConfigPrompts,
 } from "../src/config.ts";
-import type { ModelPrompts } from "../src/providers.ts";
+import { PROVIDER_PRESETS, type ModelPrompts } from "../src/providers.ts";
 
 const config: Config = {
 	activeProfile: "personal",
@@ -138,7 +138,8 @@ void test("creates a compatible profile with an empty key", async () => {
 	const prompts: ConfigPrompts = {
 		input: async () => answers.shift() ?? "",
 		password: async () => "",
-		select: async (options) => (options.message === "Commit bodies" ? "manual" : "compatible"),
+		select: async () => "manual",
+		search: async () => "compatible",
 		confirm: async () => false,
 	};
 	const modelPrompts: ModelPrompts = {
@@ -162,9 +163,10 @@ void test("creates a compatible profile with an empty key", async () => {
 
 void test("updates a profile without exposing or replacing its stored key", async () => {
 	const prompts: ConfigPrompts = {
-		input: async () => "https://api.openai.com/v1/",
+		input: async () => "https://proxy.example/v1/",
 		password: async () => "",
-		select: async (options) => (options.message === "Commit bodies" ? "manual" : "openai"),
+		select: async () => "manual",
+		search: async () => "openai",
 		confirm: async () => true,
 	};
 	const modelPrompts: ModelPrompts = {
@@ -178,7 +180,52 @@ void test("updates a profile without exposing or replacing its stored key", asyn
 	});
 	assert.equal(updated.profiles.personal?.apiKey, "secret");
 	assert.equal(updated.profiles.personal?.model, "gpt-new");
-	assert.equal(updated.profiles.personal?.baseUrl, "https://api.openai.com/v1");
+	assert.equal(updated.profiles.personal?.baseUrl, "https://proxy.example/v1");
+});
+
+void test("searches providers and uses a preset URL as an editable default", async () => {
+	let offered: Array<{ name: string; value: string }> = [];
+	const created = await setupProfile(undefined, undefined, {
+		prompts: {
+			input: async (options) => (options.message === "Profile name" ? "work" : (options.default ?? "")),
+			password: async () => "secret",
+			select: async () => "manual",
+			search: async (options) => {
+				offered = await options.source("gro");
+				return offered[0]?.value ?? "";
+			},
+			confirm: async () => true,
+		},
+		modelPrompts: { input: async () => "llama", search: async () => "unused" },
+		fetcher: async () => new Response("unavailable", { status: 503 }),
+	});
+	assert.deepEqual(offered, [{ name: "Groq", value: "groq" }]);
+	assert.equal(created.profiles.work?.baseUrl, "https://api.groq.com/openai/v1");
+});
+
+void test("accepts every provider and requires keys only for remote presets", () => {
+	for (const [provider, preset] of Object.entries(PROVIDER_PRESETS)) {
+		const baseUrl = preset.baseUrl || "http://localhost:8080/v1";
+		const candidate = {
+			...config,
+			profiles: { personal: { provider, baseUrl, model: "model", apiKey: preset.requiresApiKey ? "key" : "" } },
+		};
+		assert.equal(validateConfig(candidate).profiles.personal?.provider, provider);
+		if (preset.requiresApiKey) {
+			assert.throws(
+				() => validateConfig({ ...candidate, profiles: { personal: { ...candidate.profiles.personal, apiKey: "" } } }),
+				/Invalid apiKey/
+			);
+		}
+	}
+	assert.throws(
+		() =>
+			validateConfig({
+				...config,
+				profiles: { personal: { ...config.profiles.personal, provider: "unknown" } },
+			}),
+		/Invalid provider/
+	);
 });
 
 void test("switches profiles directly and starts selection on the active profile", async () => {
@@ -202,6 +249,7 @@ void test("switches profiles directly and starts selection on the active profile
 		prompts: {
 			input: async () => "",
 			password: async () => "",
+			search: async () => "",
 			confirm: async () => false,
 			select: async (options) => {
 				selection = options;
