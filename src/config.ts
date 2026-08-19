@@ -119,13 +119,19 @@ export const setupPrompt = createPrompt<SetupSettings, SetupSettings>((config, d
 
 	useKeypress((key, readline) => {
 		readline.clearLine(0);
+		const direction =
+			key.name === "left" || (key.name === "h" && !key.ctrl)
+				? -1
+				: key.name === "space" || key.name === "right" || (key.name === "l" && !key.ctrl)
+					? 1
+					: 0;
 		if (isUpKey(key) || isDownKey(key)) {
 			setActive((active + (isUpKey(key) ? -1 : 1) + items.length) % items.length);
-		} else if (key.name === "space" && active === 0) {
+		} else if (direction && active === 0) {
 			setSplit(!split);
-		} else if (key.name === "space" && active === 1) {
-			setBody(BODY_MODES[(BODY_MODES.indexOf(body) + 1) % BODY_MODES.length]!);
-		} else if (key.name === "q" || key.name === "escape") {
+		} else if (direction && active === 1) {
+			setBody(BODY_MODES[(BODY_MODES.indexOf(body) + direction + BODY_MODES.length) % BODY_MODES.length]!);
+		} else if (isEnterKey(key)) {
 			done({ split, body });
 		}
 	});
@@ -139,7 +145,7 @@ export const setupPrompt = createPrompt<SetupSettings, SetupSettings>((config, d
 			return isActive ? styleText("cyan", line) : line;
 		},
 	});
-	return `? Setup\n${page}\n\u2191\u2193 move \u00b7 space change \u00b7 q save and exit\u001b[?25l`;
+	return `? Setup\n${page}\n\u2191\u2193 move \u00b7 \u2190\u2192 h/l space change \u00b7 \u21b5 save and exit\u001b[?25l`;
 });
 
 const configPrompts: ConfigPrompts = {

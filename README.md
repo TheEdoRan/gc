@@ -109,7 +109,8 @@ split plan fails, earlier successful commits remain and all uncommitted patches 
 | `gc profile <name>` | Activate a profile directly.                                                            |
 | `gc init`           | Replace the complete configuration after confirmation, or create it when it is missing. |
 
-In `gc setup`, use the arrow keys to move, `space` to change a setting, and `q` or `esc` to save and exit.
+In `gc setup`, use `up` and `down` to move. Use `space`, `left`, `right`, `h`, or `l` to cycle a setting. Use `enter`
+to save and exit.
 
 In `gc profile`, the active profile is first and marked `(active)`. Use `enter` to activate a profile, `a` to add one,
 `e` to edit one, or `d` to delete one. Adding a profile activates it. Editing a profile does not change the active

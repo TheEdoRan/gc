@@ -64,7 +64,11 @@ async function driveSetupPrompt(split: boolean, body: "manual" | "auto" | "alway
 	const result = setupPrompt({ split, body }, { input, output });
 	await new Promise((resolve) => setImmediate(resolve));
 	for (const key of keys) {
-		input.write(key === "down" ? "\u001b[B" : key === "enter" ? "\r" : key === "space" ? " " : key);
+		input.write(
+			({ up: "\u001b[A", down: "\u001b[B", left: "\u001b[D", right: "\u001b[C", enter: "\r", space: " " } as const)[
+				key as "up" | "down" | "left" | "right" | "enter" | "space"
+			] ?? key
+		);
 		await new Promise((resolve) => setImmediate(resolve));
 	}
 	return { result, rawText: () => drawn, text: () => stripVTControlCharacters(drawn) };
@@ -298,14 +302,14 @@ void test("gc setup saves global settings", async () => {
 	assert.equal(updated.body, "always");
 });
 
-void test("setup prompt toggles splitting and cycles body mode with space", { timeout: 5000 }, async () => {
+void test("setup prompt cycles settings and saves only with enter", { timeout: 5000 }, async () => {
 	const previousForceColor = process.env.FORCE_COLOR;
 	const previousNoColor = process.env.NO_COLOR;
 	delete process.env.NO_COLOR;
 	process.env.FORCE_COLOR = "1";
 	let highlighted: Awaited<ReturnType<typeof driveSetupPrompt>>;
 	try {
-		highlighted = await driveSetupPrompt(true, "manual", "q");
+		highlighted = await driveSetupPrompt(true, "manual", "enter");
 	} finally {
 		if (previousForceColor === undefined) delete process.env.FORCE_COLOR;
 		else process.env.FORCE_COLOR = previousForceColor;
@@ -321,7 +325,21 @@ void test("setup prompt toggles splitting and cycles body mode with space", { ti
 	assert.doesNotMatch(highlighted.text(), /Profile manager/);
 	assert.doesNotMatch(highlighted.text(), /\u21b5 open/);
 
-	const saved = await driveSetupPrompt(true, "manual", "space", "down", "space", "space", "q");
+	const saved = await driveSetupPrompt(
+		true,
+		"manual",
+		"space",
+		"down",
+		"right",
+		"l",
+		"left",
+		"h",
+		"q",
+		"right",
+		"\u001b",
+		"right",
+		"enter"
+	);
 	assert.deepEqual(await saved.result, { split: false, body: "always" });
 	assert.match(saved.text(), /Commit splitting: on off/);
 	assert.match(saved.text(), /Commit body: manual auto always/);
