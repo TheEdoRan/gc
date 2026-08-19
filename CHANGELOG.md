@@ -1,5 +1,11 @@
 # @theedoran/gc
 
+## 0.5.1
+
+### Patch Changes
+
+- 7c42b55: Let `gc setup` cycle settings with space, arrow keys, or h and l, then save and exit with enter.
+
 ## 0.5.0
 
 ### Minor Changes
