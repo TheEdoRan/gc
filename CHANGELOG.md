@@ -1,5 +1,12 @@
 # @theedoran/gc
 
+## 0.5.2
+
+### Patch Changes
+
+- 3fc0d81: Clear generation progress before review and suppress AI SDK warnings.
+- 01e2662: Allow profiles to be renamed and mute the controls in all interactive views.
+
 ## 0.5.1
 
 ### Patch Changes
