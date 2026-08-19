@@ -156,7 +156,8 @@ export async function run(args = process.argv.slice(2)): Promise<void> {
 	for (;;) {
 		// A reasoning model can think for a minute before its first token. Without a spinner the
 		// CLI looks hung, and the user kills a request that was about to succeed.
-		const spinner = createSpinner(terminal, "Generating commit(s)");
+		// Use the review's stream so its first frame cannot overtake the spinner's final erase.
+		const spinner = createSpinner(createTerminal(process.stdout), "Generating commit(s)");
 		spinner.phase("building context");
 
 		let plan: CommitPlan;

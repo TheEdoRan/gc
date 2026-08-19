@@ -9,6 +9,8 @@ import { buildEvidence, buildFallbackPlan, buildGroups } from "./evidence.ts";
 import type { StagedFile } from "./git.ts";
 import { PROVIDER_PRESETS } from "./providers.ts";
 
+globalThis.AI_SDK_LOG_WARNINGS = false;
+
 export interface ProposedCommit {
 	subject: string;
 	body: string;
@@ -384,18 +386,10 @@ async function callModel(input: {
 		}
 	}
 
-	let first = true;
-	function announce() {
-		if (!first) return;
-		first = false;
-		input.onProgress({ type: "phase", label: "writing plan" });
-	}
-
 	if (!input.structured) {
 		const result = streamText(request);
 		let text = "";
 		for await (const delta of result.textStream) {
-			announce();
 			text += delta;
 			report(extractSubjects(text));
 		}
@@ -409,7 +403,6 @@ async function callModel(input: {
 	try {
 		const result = streamText({ ...request, output: Output.object({ schema: input.schema }) });
 		for await (const partial of result.partialOutputStream) {
-			announce();
 			const commits = (partial as { commits?: Array<{ subject?: unknown } | undefined> } | undefined)?.commits ?? [];
 			report(commits.map((commit) => (typeof commit?.subject === "string" ? commit.subject : "")));
 		}

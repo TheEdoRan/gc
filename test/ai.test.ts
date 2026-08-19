@@ -542,13 +542,6 @@ function planFrom(baseUrl: string, onProgress: (event: PlanEvent) => void) {
 }
 
 test("streams subjects from the provider and keeps failure classification intact", { timeout: 10_000 }, async (t) => {
-	// The compatible provider warns that it cannot enforce a schema, which is noise here.
-	const warnings = globalThis as { AI_SDK_LOG_WARNINGS?: boolean | undefined };
-	const previousWarnings = warnings.AI_SDK_LOG_WARNINGS;
-	warnings.AI_SDK_LOG_WARNINGS = false;
-	t.after(() => {
-		warnings.AI_SDK_LOG_WARNINGS = previousWarnings;
-	});
 	await new Promise<void>((resolve) => streamServer.listen(0, "127.0.0.1", resolve));
 	t.after(() => streamServer.close());
 	const address = streamServer.address();

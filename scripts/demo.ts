@@ -55,7 +55,6 @@ const { split, body } = resolveDemoOptions(
 
 /** Type the canned subjects out so the streaming display has something to show. */
 async function replay(onProgress?: (event: PlanEvent) => void) {
-	onProgress?.({ type: "phase", label: "writing plan" });
 	if (!values.slow) return canned;
 	for (const [index, commit] of canned.commits.entries()) {
 		for (let cut = 1; cut <= commit.subject.length; cut++) {
@@ -80,7 +79,7 @@ if (values.offline) {
 	liveProfile = profile;
 }
 
-const terminal = createTerminal();
+const terminal = createTerminal(process.stdout);
 const spinner = createSpinner(terminal, profileLabel);
 spinner.phase("waiting for the model");
 

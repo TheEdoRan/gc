@@ -49,13 +49,13 @@ test("an interactive spinner hides the cursor, redraws, and leaves no hole showi
 	const tty = sink();
 	tty.stream.isTTY = true;
 	const spinner = createSpinner(createTerminal(tty.stream, {}), "gpt-5");
-	spinner.phase("writing plan");
+	spinner.phase("waiting");
 	spinner.subject(1, "fix: second");
 	spinner.stop();
 
 	const output = tty.text();
 	assert.match(output, /\[\?25l/, "the cursor is hidden while the region is live");
-	assert.match(output, /writing plan/);
+	assert.match(output, /waiting/);
 	assert.match(output, /fix: second/);
 	assert.doesNotMatch(output, /undefined/, "the unwritten row is blank, not the word undefined");
 	assert.match(output, /\[\?25h/, "and the cursor comes back");

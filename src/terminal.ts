@@ -44,7 +44,7 @@ const HIDE_CURSOR = "\u001b[?25l";
 const SHOW_CURSOR = "\u001b[?25h";
 
 export interface Spinner {
-	/** Replace the headline, for example "waiting for the model" or "writing plan". */
+	/** Replace the headline, for example "waiting for the model". */
 	phase(label: string): void;
 	/** Set the streamed subject at `index`. Ignored when the region cannot be redrawn. */
 	subject(index: number, text: string): void;
