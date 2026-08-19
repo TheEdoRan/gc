@@ -1,5 +1,18 @@
 # @theedoran/gc
 
+## 0.5.0
+
+### Minor Changes
+
+- 52bbc27: Separate global settings from profile editing. Add `gc setup` for commit-splitting and commit-body defaults, make
+  `gc init` ask before it replaces existing configuration, and let `gc profile` add and activate profiles with `a`.
+
+### Patch Changes
+
+- 52bbc27: Add `gc config` to open the user configuration file in `$VISUAL` or `$EDITOR`.
+- 52bbc27: Show the active profile first, restore the profile selection highlight, and keep the stored API key when an edited
+  profile changes providers.
+
 ## 0.4.1
 
 ### Patch Changes
