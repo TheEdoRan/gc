@@ -16,15 +16,18 @@ npm install --global @theedoran/gc
 gc init
 ```
 
-`gc init` creates or updates a profile, activates it, asks how commit bodies should be generated, and asks whether
-commit splitting should be enabled by default. Setup includes searchable provider selection, an editable endpoint,
-API key, and model selection. If the provider cannot list its models, you can enter a model name manually.
+`gc init` creates the first profile and asks for the global commit-splitting and commit-body defaults. If configuration
+already exists, it asks before replacing the complete file and defaults to keeping it. Profile setup includes searchable
+provider selection, an editable endpoint, API key, and model selection. If the provider cannot list its models, you can
+enter a model name manually.
 
 ## Usage
 
 ```text
 gc [-a|--all] [-i|--instructions <text>] [--split|--no-split] [--body <mode>]
 gc init
+gc setup
+gc config
 gc profile [name]
 gc --help
 gc --version
@@ -98,8 +101,22 @@ split plan fails, earlier successful commits remain and all uncommitted patches 
 
 ## Profiles and configuration
 
-Run `gc profile` to manage profiles interactively. Use `enter` to select a profile, `e` to edit it, or `d` to delete it.
-Run `gc profile <name>` to switch directly. Initializing or selecting a profile makes it the default for future runs.
+| Command             | Action                                                                                  |
+| ------------------- | --------------------------------------------------------------------------------------- |
+| `gc setup`          | Change the global commit-splitting and commit-body defaults.                            |
+| `gc config`         | Open the user configuration file in `$VISUAL` or `$EDITOR`.                             |
+| `gc profile`        | Add, edit, delete, or activate profiles in an interactive list.                         |
+| `gc profile <name>` | Activate a profile directly.                                                            |
+| `gc init`           | Replace the complete configuration after confirmation, or create it when it is missing. |
+
+In `gc setup`, use the arrow keys to move, `space` to change a setting, and `q` or `esc` to save and exit.
+
+In `gc profile`, the active profile is first and marked `(active)`. Use `enter` to activate a profile, `a` to add one,
+`e` to edit one, or `d` to delete one. Adding a profile activates it. Editing a profile does not change the active
+profile or the global settings. If you leave the API key blank while editing, `gc` keeps the stored key, including when
+you change the provider.
+
+A `.gc.yaml` setting or command-line flag can override the global `split` and `body` defaults.
 
 Configuration is stored in `config.yaml` under the native per-user configuration directory selected by
 [`env-paths`](https://github.com/sindresorhus/env-paths). The directory is created with mode `0700` and the file with mode

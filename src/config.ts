@@ -60,11 +60,12 @@ export interface ConfigOptions {
 	path?: string;
 	prompts?: ConfigPrompts;
 	profilePrompt?: typeof profilePrompt;
+	setupPrompt?: typeof setupPrompt;
 	modelPrompts?: Parameters<typeof selectModel>[1];
 	fetcher?: typeof fetch;
 }
 
-export type ProfileAction = { action: "select" | "edit" | "delete"; name: string };
+export type ProfileAction = { action: "select" | "edit" | "delete"; name: string } | { action: "add" };
 
 export const profilePrompt = createPrompt<ProfileAction, { profiles: string[]; activeProfile: string }>(
 	({ profiles, activeProfile }, done) => {
@@ -83,6 +84,8 @@ export const profilePrompt = createPrompt<ProfileAction, { profiles: string[]; a
 			} else if (key.name === "d" && !key.ctrl) {
 				if (profiles.length === 1) setError("The only profile cannot be deleted.");
 				else done({ action: "delete", name: profiles[active]! });
+			} else if (key.name === "a" && !key.ctrl) {
+				done({ action: "add" });
 			}
 		});
 
@@ -90,12 +93,54 @@ export const profilePrompt = createPrompt<ProfileAction, { profiles: string[]; a
 			items: profiles,
 			active,
 			pageSize: 7,
-			renderItem: ({ item, isActive }) =>
-				`${isActive ? "\u276f" : " "} ${item}${item === activeProfile ? ` ${styleText("dim", "(active)")}` : ""}`,
+			renderItem: ({ item, isActive }) => {
+				const line = `${isActive ? "\u276f" : " "} ${item}${item === activeProfile ? ` ${styleText("dim", "(active)")}` : ""}`;
+				return isActive ? styleText("cyan", line) : line;
+			},
 		});
-		return `? Active profile\n${page}\n${error ? `${styleText("red", error)}\n` : ""}\u2191\u2193 move \u00b7 \u21b5 select \u00b7 e edit \u00b7 d delete\u001b[?25l`;
+		return `? Profile list\n${page}\n${error ? `${styleText("red", error)}\n` : ""}\u2191\u2193 move \u00b7 \u21b5 make active \u00b7 a add \u00b7 e edit \u00b7 d delete\u001b[?25l`;
 	}
 );
+
+type SetupSettings = { split: boolean; body: BodyMode };
+
+function renderOptions(values: readonly string[], selected: string) {
+	return values.map((value) => styleText(value === selected ? "cyan" : "dim", value)).join(" ");
+}
+
+export const setupPrompt = createPrompt<SetupSettings, SetupSettings>((config, done) => {
+	const [active, setActive] = useState(0);
+	const [split, setSplit] = useState(config.split);
+	const [body, setBody] = useState(config.body);
+	const items = [
+		`Commit splitting: ${renderOptions(["on", "off"], split ? "on" : "off")}`,
+		`Commit body: ${renderOptions(BODY_MODES, body)}`,
+	];
+
+	useKeypress((key, readline) => {
+		readline.clearLine(0);
+		if (isUpKey(key) || isDownKey(key)) {
+			setActive((active + (isUpKey(key) ? -1 : 1) + items.length) % items.length);
+		} else if (key.name === "space" && active === 0) {
+			setSplit(!split);
+		} else if (key.name === "space" && active === 1) {
+			setBody(BODY_MODES[(BODY_MODES.indexOf(body) + 1) % BODY_MODES.length]!);
+		} else if (key.name === "q" || key.name === "escape") {
+			done({ split, body });
+		}
+	});
+
+	const page = usePagination({
+		items,
+		active,
+		pageSize: 2,
+		renderItem: ({ item, isActive }) => {
+			const line = `${isActive ? "\u276f" : " "} ${item}`;
+			return isActive ? styleText("cyan", line) : line;
+		},
+	});
+	return `? Setup\n${page}\n\u2191\u2193 move \u00b7 space change \u00b7 q save and exit\u001b[?25l`;
+});
 
 const configPrompts: ConfigPrompts = {
 	input: (options) => input(options),
@@ -104,6 +149,12 @@ const configPrompts: ConfigPrompts = {
 	search: (options) => search(options),
 	confirm: (options) => confirm(options),
 };
+
+const bodyChoices = [
+	{ name: "Only when I ask for one", value: "manual" },
+	{ name: "When the subject cannot carry the change", value: "auto" },
+	{ name: "Always", value: "always" },
+];
 
 const configKeys = ["activeProfile", "split", "profiles"];
 const optionalConfigKeys = ["excludeContent", "includeContent", "body"];
@@ -258,7 +309,7 @@ export async function readProjectConfig(root: string): Promise<ProjectConfig | u
 	return validateProjectConfig(parsed);
 }
 
-/** Project globs extend the global ones, which extend the built-in defaults. `split` and `body` are overridden, not merged. */
+/** Project globs extend the global ones. Project `split` and `body` override their user defaults. */
 export function mergeConfig(global: Config, project?: ProjectConfig) {
 	return {
 		excludeContent: [...(global.excludeContent ?? []), ...(project?.excludeContent ?? [])],
@@ -307,23 +358,34 @@ export async function writeConfig(config: Config, path = getConfigPath()) {
 	}
 }
 
-function profileName(config: Config | undefined, requested: string | undefined, prompts: ConfigPrompts) {
+function profileName(
+	config: Config | undefined,
+	requested: string | undefined,
+	prompts: ConfigPrompts,
+	newProfile: boolean
+) {
 	if (requested) return Promise.resolve(requested);
 	return prompts.input({
 		message: "Profile name",
-		default: config?.activeProfile ?? "personal",
-		validate: (value) => value.trim().length > 0 || "Enter a profile name",
+		...(!newProfile ? { default: config?.activeProfile ?? "personal" } : {}),
+		validate: (value) => {
+			const name = value.trim();
+			if (!name) return "Enter a profile name";
+			return !newProfile || !config || !Object.hasOwn(config.profiles, name) || "That profile already exists";
+		},
 	});
 }
 
 export async function setupProfile(
 	config?: Config,
 	requestedName?: string,
-	options: ConfigOptions = {}
+	options: ConfigOptions = {},
+	newProfile = false
 ): Promise<Config> {
 	const prompts = options.prompts ?? configPrompts;
-	const name = (await profileName(config, requestedName, prompts)).trim();
+	const name = (await profileName(config, requestedName, prompts, newProfile)).trim();
 	if (!name) throw new Error("Profile name cannot be empty");
+	if (newProfile && config && Object.hasOwn(config.profiles, name)) throw new Error(`Profile already exists: ${name}`);
 	const existing = config?.profiles[name];
 	const selectedProvider = await prompts.search({
 		message: "Provider",
@@ -344,7 +406,7 @@ export async function setupProfile(
 	)
 		.trim()
 		.replace(/\/$/, "");
-	const currentKey = existing?.provider === provider ? existing.apiKey : undefined;
+	const currentKey = existing?.apiKey;
 	const enteredKey = await prompts.password({
 		message: existing ? "API key (leave blank to keep the current key)" : "API key",
 		mask: "*",
@@ -357,25 +419,11 @@ export async function setupProfile(
 		options.modelPrompts,
 		options.fetcher
 	);
-	const selectedBody = await prompts.select({
-		message: "Commit bodies",
-		default: config?.body ?? "manual",
-		choices: [
-			{ name: "Only when I ask for one", value: "manual" },
-			{ name: "When the subject cannot carry the change", value: "auto" },
-			{ name: "Always", value: "always" },
-		],
-	});
-	if (!isBodyMode(selectedBody)) throw new Error("Invalid body selection");
-	const body = selectedBody;
 	// Keep the fields the prompts never ask about instead of silently dropping them on an update.
 	const next: Config = {
 		activeProfile: name,
-		split: await prompts.confirm({
-			message: "Split unrelated changes into separate commits?",
-			default: config?.split ?? true,
-		}),
-		body,
+		split: config?.split ?? true,
+		body: config?.body ?? "manual",
 		profiles: {
 			...config?.profiles,
 			[name]: {
@@ -395,7 +443,49 @@ export async function setupProfile(
 
 export async function initConfig(requestedName?: string, options: ConfigOptions = {}) {
 	const path = options.path ?? getConfigPath();
-	const config = await setupProfile(await readConfig(path), requestedName, options);
+	const current = await readConfig(path);
+	const prompts = options.prompts ?? configPrompts;
+	if (
+		current &&
+		!(await prompts.confirm({
+			message: "Re-initialize gc config?",
+			default: false,
+		}))
+	) {
+		return undefined;
+	}
+	const profile = await setupProfile(undefined, requestedName, options);
+	const config = await setupGlobalSettings(profile, prompts);
+	await writeConfig(config, path);
+	return config;
+}
+
+async function setupGlobalSettings(config: Config, prompts: ConfigPrompts) {
+	const body = await prompts.select({
+		message: "Commit bodies",
+		default: config.body ?? "manual",
+		choices: bodyChoices,
+	});
+	if (!isBodyMode(body)) throw new Error("Invalid body selection");
+	return validateConfig({
+		...config,
+		body,
+		split: await prompts.confirm({
+			message: "Split unrelated changes into separate commits?",
+			default: config.split,
+		}),
+	});
+}
+
+export async function setupConfig(options: ConfigOptions = {}) {
+	const path = options.path ?? getConfigPath();
+	const current = await readConfig(path);
+	if (!current) throw new Error("Run gc init first");
+	const choice = await (options.setupPrompt ?? setupPrompt)({
+		split: current.split,
+		body: current.body ?? "manual",
+	});
+	const config = validateConfig({ ...current, split: choice.split, body: choice.body });
 	await writeConfig(config, path);
 	return config;
 }
@@ -411,9 +501,18 @@ export async function selectProfile(requestedName?: string, options: ConfigOptio
 	const choice = requestedName
 		? { action: "select" as const, name: requestedName }
 		: await (options.profilePrompt ?? profilePrompt)({
-				profiles: Object.keys(config.profiles),
+				profiles: [
+					config.activeProfile,
+					...Object.keys(config.profiles).filter((name) => name !== config.activeProfile),
+				],
 				activeProfile: config.activeProfile,
 			});
+
+	if (choice.action === "add") {
+		const updated = await setupProfile(config, undefined, options, true);
+		await writeConfig(updated, path);
+		return updated;
+	}
 
 	if (choice.action === "edit") {
 		const edited = await setupProfile(config, choice.name, options);
@@ -445,3 +544,4 @@ export async function selectProfile(requestedName?: string, options: ConfigOptio
 
 export const runInit = initConfig;
 export const runProfile = selectProfile;
+export const runSetup = setupConfig;

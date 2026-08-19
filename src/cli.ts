@@ -1,15 +1,21 @@
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { emitKeypressEvents, type Interface } from "node:readline";
 import { parseArgs } from "node:util";
+
+import { ExternalEditor } from "@inquirer/external-editor";
 
 import packageJson from "../package.json" with { type: "json" };
 import { createBodyGenerator, DEFAULT_MAX_INPUT_TOKENS, generateCommitPlan, type CommitPlan } from "./ai.ts";
 import {
 	BODY_MODES,
+	getConfigPath,
 	mergeConfig,
 	readConfig,
 	readProjectConfig,
 	runInit,
 	runProfile,
+	runSetup,
 	type BodyMode,
 } from "./config.ts";
 import { discoverContext } from "./context.ts";
@@ -20,6 +26,8 @@ import { createSpinner, createTerminal } from "./terminal.ts";
 export const help = `Usage:
   gc [-a|--all] [-i|--instructions <text>] [--split|--no-split] [--body <mode>]
   gc init
+  gc setup
+  gc config
   gc profile [name]
   gc --help
   gc --version`;
@@ -28,6 +36,8 @@ export type CliArguments =
 	| { command: "help"; all: false }
 	| { command: "version"; all: false }
 	| { command: "init"; all: false }
+	| { command: "setup"; all: false }
+	| { command: "config"; all: false }
 	| { command: "profile"; name?: string; all: false }
 	| { command: "commit"; all: boolean; instructions?: string; split?: boolean; body?: BodyMode };
 
@@ -56,7 +66,11 @@ export function parseCliArgs(args: string[]): CliArguments {
 	if (parsed.values.version) return { command: "version", all: false };
 
 	const [command, name, ...extra] = parsed.positionals;
-	if (extra.length || (command && !["init", "profile"].includes(command)) || (command === "init" && name)) {
+	if (
+		extra.length ||
+		(command && !["init", "setup", "config", "profile"].includes(command)) ||
+		(command !== "profile" && name)
+	) {
 		throw new Error(`Invalid command.\n\n${help}`);
 	}
 	if (command) {
@@ -69,9 +83,8 @@ export function parseCliArgs(args: string[]): CliArguments {
 		) {
 			throw new Error(`Commit options cannot be used with gc ${command}.`);
 		}
-		return command === "init"
-			? { command: "init", all: false }
-			: { command: "profile", ...(name ? { name } : {}), all: false };
+		if (command === "init" || command === "setup" || command === "config") return { command, all: false };
+		return { command: "profile", ...(name ? { name } : {}), all: false };
 	}
 	return {
 		command: "commit",
@@ -82,13 +95,28 @@ export function parseCliArgs(args: string[]): CliArguments {
 	};
 }
 
+export function openConfig(
+	path = getConfigPath(),
+	editor: { bin: string; args: string[] } = new ExternalEditor().editor
+) {
+	if (!existsSync(path)) throw new Error("No configuration found. Run gc init first.");
+	const result = spawnSync(editor.bin, [...editor.args, path], { stdio: "inherit" });
+	if (result.error) throw new Error(`Editor failed: ${result.error.message}`);
+	if (result.status !== 0) throw new Error(`Editor exited with status ${result.status ?? "unknown"}.`);
+}
+
 export async function run(args = process.argv.slice(2)): Promise<void> {
 	const options = parseCliArgs(args);
 	if (options.command === "help") return void process.stdout.write(`${help}\n`);
 	if (options.command === "version") return void process.stdout.write(`${packageJson.version}\n`);
+	if (options.command === "config") return openConfig();
 	if (options.command === "init") {
-		await runInit();
-		return void process.stdout.write("Profile saved.\n");
+		const config = await runInit();
+		return void process.stdout.write(config ? "Configuration saved.\n" : "Configuration unchanged.\n");
+	}
+	if (options.command === "setup") {
+		await runSetup();
+		return void process.stdout.write("Configuration saved.\n");
 	}
 	if (options.command === "profile") {
 		const config = await runProfile(options.name);
