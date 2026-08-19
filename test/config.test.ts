@@ -320,6 +320,7 @@ void test("setup prompt cycles settings and saves only with enter", { timeout: 5
 	assert.match(highlighted.rawText(), /\u001b\[36mon\u001b\[36m/);
 	assert.match(highlighted.rawText(), /\u001b\[2moff\u001b\[22m/);
 	assert.match(highlighted.rawText(), /\u001b\[36mmanual\u001b\[39m/);
+	assert.match(highlighted.rawText(), /\u001b\[2m\u2191\u2193 move/);
 	assert.match(highlighted.text(), /Commit splitting: on off/);
 	assert.match(highlighted.text(), /Commit body: manual auto always/);
 	assert.doesNotMatch(highlighted.text(), /Profile manager/);
@@ -472,8 +473,12 @@ void test("edits and deletes profiles without changing the active profile unexpe
 		},
 		path
 	);
+	const questions: string[] = [];
 	const prompts: ConfigPrompts = {
-		input: async () => "http://localhost:11434/v1",
+		input: async (options) => {
+			questions.push(options.message);
+			return options.default ?? "http://localhost:11434/v1";
+		},
 		password: async () => "",
 		select: async () => {
 			throw new Error("Profile editing must not ask for body settings");
@@ -491,6 +496,7 @@ void test("edits and deletes profiles without changing the active profile unexpe
 		modelPrompts: { input: async () => "new", search: async () => "unused" },
 		fetcher: async () => new Response("unavailable", { status: 503 }),
 	});
+	assert.deepEqual(questions.slice(0, 2), ["Profile name", "Base URL"]);
 	assert.equal((await readConfig(path))?.activeProfile, "personal");
 	assert.equal((await readConfig(path))?.profiles.work?.model, "new");
 
@@ -507,6 +513,29 @@ void test("edits and deletes profiles without changing the active profile unexpe
 			work: { provider: "compatible", baseUrl: "http://localhost:11434/v1", model: "new", apiKey: "" },
 		},
 	});
+});
+
+void test("renames the active profile and its active setting", async () => {
+	const directory = await mkdtemp(join(tmpdir(), "gc-rename-profile-"));
+	const path = join(directory, "config.yaml");
+	await writeConfig(config, path);
+	const updated = await selectProfile(undefined, {
+		path,
+		profilePrompt: async () => ({ action: "edit", name: "personal" }),
+		prompts: {
+			input: async (options) => (options.message === "Profile name" ? "home" : (options.default ?? "")),
+			password: async () => "",
+			select: async () => "unused",
+			search: async () => "openai",
+			confirm: async () => false,
+		},
+		modelPrompts: { input: async () => "unused", search: async () => "gpt-test" },
+		fetcher: async () => new Response(JSON.stringify({ data: [{ id: "gpt-test" }] })),
+	});
+	assert.equal(updated.activeProfile, "home");
+	assert.equal(updated.profiles.personal, undefined);
+	assert.deepEqual(updated.profiles.home, config.profiles.personal);
+	assert.deepEqual(await readConfig(path), updated);
 });
 
 void test("adds and activates a profile from profile management", async () => {
@@ -549,6 +578,7 @@ void test("profile prompt binds a, e, and d and protects the only profile", { ti
 		else process.env.NO_COLOR = previousNoColor;
 	}
 	assert.match(colored.rawText(), /\u001b\[36m\u276f personal/);
+	assert.match(colored.rawText(), /\u001b\[2m\u2191\u2193 move/);
 	assert.match(colored.text(), /\? Profile list/);
 	assert.match(colored.text(), /\u21b5 make active/);
 

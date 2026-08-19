@@ -98,7 +98,7 @@ export const profilePrompt = createPrompt<ProfileAction, { profiles: string[]; a
 				return isActive ? styleText("cyan", line) : line;
 			},
 		});
-		return `? Profile list\n${page}\n${error ? `${styleText("red", error)}\n` : ""}\u2191\u2193 move \u00b7 \u21b5 make active \u00b7 a add \u00b7 e edit \u00b7 d delete\u001b[?25l`;
+		return `? Profile list\n${page}\n${error ? `${styleText("red", error)}\n` : ""}${styleText("dim", "\u2191\u2193 move \u00b7 \u21b5 make active \u00b7 a add \u00b7 e edit \u00b7 d delete")}\u001b[?25l`;
 	}
 );
 
@@ -145,7 +145,7 @@ export const setupPrompt = createPrompt<SetupSettings, SetupSettings>((config, d
 			return isActive ? styleText("cyan", line) : line;
 		},
 	});
-	return `? Setup\n${page}\n\u2191\u2193 move \u00b7 \u2190\u2192 h/l space change \u00b7 \u21b5 save and exit\u001b[?25l`;
+	return `? Setup\n${page}\n${styleText("dim", "\u2191\u2193 move \u00b7 \u2190\u2192 h/l space change \u00b7 \u21b5 save and exit")}\u001b[?25l`;
 });
 
 const configPrompts: ConfigPrompts = {
@@ -521,8 +521,32 @@ export async function selectProfile(requestedName?: string, options: ConfigOptio
 	}
 
 	if (choice.action === "edit") {
+		const prompts = options.prompts ?? configPrompts;
+		const name = (
+			await prompts.input({
+				message: "Profile name",
+				default: choice.name,
+				validate: (value) => {
+					const candidate = value.trim();
+					if (!candidate) return "Enter a profile name";
+					return (
+						candidate === choice.name || !Object.hasOwn(config.profiles, candidate) || "That profile already exists"
+					);
+				},
+			})
+		).trim();
+		if (!name) throw new Error("Profile name cannot be empty");
+		if (name !== choice.name && Object.hasOwn(config.profiles, name)) {
+			throw new Error(`Profile already exists: ${name}`);
+		}
 		const edited = await setupProfile(config, choice.name, options);
-		const updated = { ...edited, activeProfile: config.activeProfile };
+		const profiles = { ...edited.profiles, [name]: edited.profiles[choice.name]! };
+		if (name !== choice.name) delete profiles[choice.name];
+		const updated = {
+			...edited,
+			profiles,
+			activeProfile: choice.name === config.activeProfile ? name : config.activeProfile,
+		};
 		await writeConfig(updated, path);
 		return updated;
 	}

@@ -114,8 +114,8 @@ to save and exit.
 
 In `gc profile`, the active profile is first and marked `(active)`. Use `enter` to activate a profile, `a` to add one,
 `e` to edit one, or `d` to delete one. Adding a profile activates it. Editing a profile does not change the active
-profile or the global settings. If you leave the API key blank while editing, `gc` keeps the stored key, including when
-you change the provider.
+profile or the global settings. Renaming the active profile also updates the active profile setting. If you leave the API
+key blank while editing, `gc` keeps the stored key, including when you change the provider.
 
 A `.gc.yaml` setting or command-line flag can override the global `split` and `body` defaults.
 
